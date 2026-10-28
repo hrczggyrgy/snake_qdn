@@ -1,0 +1,252 @@
+--- a/app.py
++++ b/app.py
+@@ -114,7 +114,14 @@
+ # Game Frame Display (inline PNG for reliable rendering)
+ # ============================================================================
+ def display_game_frame(frame):
+-    """Display game frame using inline PNG to avoid Streamlit media delivery issues."""
++    """Use a persistent canvas for board state; keep PNG as an initial fallback."""
++    state = st.session_state.get("game_state")
++    if state is not None:
++        from game_canvas import render_game_canvas
++        render_game_canvas(
++            state, show_grid=st.session_state.get("show_grid", False)
++        )
++        return
+     if frame is None:
+         st.error("The environment returned no game frame.")
+         return
+@@ -1032,88 +1039,33 @@
+                 f"ε {state.agent.epsilon:.3f}"
+             )
+ 
+-    # Chart fragment - refreshes every 1 second when running (reduced from 0.5s)
+-    _chart_refresh = 1.0 if _running else None
+-
+-    # Persistent chart placeholders (created once, updated by fragment)
+-    score_slot = st.empty()
+-    loss_col, epsilon_col = st.columns(2, gap="small")
+-    loss_slot = loss_col.empty()
+-    epsilon_slot = epsilon_col.empty()
+-
+-    # Track chart data versions for change detection
+-    if "chart_versions" not in st.session_state:
+-        st.session_state.chart_versions = {"scores": 0, "loss": 0, "epsilon": 0}
+-
++    # The fragment owns its layout; never retain DeltaGenerators in Session State.
+     @st.fragment(run_every=1.0 if _running else None)
+     def live_charts_area():
+-        """Render learning charts. Updates independently of game fragment."""
+-        stats = st.session_state.training_stats
+-        agent = st.session_state.agent
+-
+-        # Compute version tuples for change detection
+-        versions = {
+-            "scores": (len(stats["scores"]), len(stats["mean_scores"])),
+-            "loss": agent.trainer.training_step if agent else 0,
+-            "epsilon": (len(stats["epsilon"]), agent.epsilon if agent else None),
+-        }
+-
+-        # Check which charts need updating
+-        changed = {
+-            name for name, version in versions.items()
+-            if st.session_state.chart_versions.get(name) != version
+-        }
+-
+-        if not changed:
+-            return
+-
+-        # Build only the changed charts
+-        figures = dict(zip(
+-            ("scores", "loss", "epsilon"),
+-            render_training_charts(),
+-        ))
+-
+-        slots = {
+-            "scores": score_slot,
+-            "loss": st.session_state.get("_loss_slot", loss_col.empty()),
+-            "epsilon": st.session_state.get("_epsilon_slot", epsilon_col.empty()),
+-        }
+-
+-        # Store slots in session state for persistence
+-        st.session_state._loss_slot = loss_col.empty()
+-        st.session_state._epsilon_slot = epsilon_col.empty()
+-
+-        for name in ("scores", "loss", "epsilon"):
+-            if name not in changed:
+-                continue
+-
+-            fig = figures[name]
++        """Render every chart on every rerun, including when data is unchanged."""
++        score_fig, loss_fig, epsilon_fig = render_training_charts()
++        score_fig.update_layout(
++            height=220, autosize=True, width=None,
++            uirevision="snake-scores", transition_duration=0,
++        )
++        st.plotly_chart(
++            score_fig, width="stretch", key="live_scores",
++            config={"displayModeBar": False},
++        )
++        loss_col, epsilon_col = st.columns(2, gap="small")
++        for name, fig, column in (
++            ("loss", loss_fig, loss_col),
++            ("epsilon", epsilon_fig, epsilon_col),
++        ):
+             fig.update_layout(
+-                height=220 if name == "scores" else 180,
+-                autosize=True,
+-                width=None,
+-                uirevision=f"snake-{name}",  # Preserve Plotly state (zoom/pan)
+-                transition_duration=0,
++                height=180, autosize=True, width=None,
++                uirevision=f"snake-{name}", transition_duration=0,
+             )
+-
+-            if name == "scores":
+-                slots[name].plotly_chart(
+-                    fig, width='stretch', key=f"live_{name}",
+-                    config={"displayModeBar": False}
++            with column:
++                st.plotly_chart(
++                    fig, width="stretch", key=f"live_{name}",
++                    config={"displayModeBar": False},
+                 )
+-            elif name == "loss":
+-                st.session_state._loss_slot.plotly_chart(
+-                    fig, width='stretch', key=f"live_{name}",
+-                    config={"displayModeBar": False}
+-                )
+-            else:  # epsilon
+-                st.session_state._epsilon_slot.plotly_chart(
+-                    fig, width='stretch', key=f"live_{name}",
+-                    config={"displayModeBar": False}
+-                )
+-
+-        # Update tracked versions
+-        st.session_state.chart_versions.update(versions)
+ 
+     # ============================================================================
+     # Main Layout: Game (40%) + Charts (60%)
+--- /dev/null
++++ b/game_canvas.py
+@@ -0,0 +1,88 @@
++"""Coordinate-only Snake renderer using Streamlit Components v2."""
++import streamlit as st
++
++_JS = r"""
++export default function ({parentElement, data}) {
++    const canvas = parentElement.querySelector("canvas");
++    if (!canvas || !data) return;
++    const signature = JSON.stringify(data);
++    if (canvas.dataset.signature === signature) return;
++    const ctx = canvas.getContext("2d");
++    const n = data.grid_size;
++    if (!ctx || !Number.isInteger(n) || n < 1) return;
++    const size = canvas.width;
++    const cell = size / n;
++    ctx.clearRect(0, 0, size, size);
++    ctx.fillStyle = "#1e1e2e";
++    ctx.fillRect(0, 0, size, size);
++    if (data.show_grid) {
++        ctx.strokeStyle = "rgba(160,160,160,0.15)";
++        ctx.lineWidth = 1;
++        ctx.beginPath();
++        for (let i = 0; i <= n; i++) {
++            const p = i * cell;
++            ctx.moveTo(p, 0); ctx.lineTo(p, size);
++            ctx.moveTo(0, p); ctx.lineTo(size, p);
++        }
++        ctx.stroke();
++    }
++    data.snake.forEach(([x, y], i) => {
++        ctx.fillStyle = i === 0 ? "#32cd32" : "#228b22";
++        ctx.fillRect(x * cell + 1, y * cell + 1, cell - 2, cell - 2);
++    });
++    if (data.snake.length) {
++        const [x, y] = data.snake[0];
++        const eyes = [
++            [[0.75, 0.3], [0.75, 0.7]],
++            [[0.3, 0.75], [0.7, 0.75]],
++            [[0.25, 0.3], [0.25, 0.7]],
++            [[0.3, 0.25], [0.7, 0.25]],
++        ][data.direction];
++        ctx.fillStyle = "white";
++        for (const [dx, dy] of eyes) {
++            ctx.beginPath();
++            ctx.arc((x + dx) * cell, (y + dy) * cell, cell * 0.08, 0, 2 * Math.PI);
++            ctx.fill();
++        }
++    }
++    if (data.food !== null) {
++        ctx.fillStyle = "#ff4444";
++        ctx.beginPath();
++        ctx.arc((data.food[0] + 0.5) * cell,
++                (data.food[1] + 0.5) * cell, cell * 0.38, 0, 2 * Math.PI);
++        ctx.fill();
++    }
++    if (data.game_over) {
++        ctx.fillStyle = "rgba(0,0,0,0.65)";
++        ctx.fillRect(0, size * 0.4, size, size * 0.2);
++        ctx.fillStyle = "#ff6666";
++        ctx.font = "bold 42px sans-serif";
++        ctx.textAlign = "center";
++        ctx.fillText("GAME OVER", size / 2, size * 0.525);
++    }
++    canvas.dataset.signature = signature;
++}
++"""
++
++_canvas = st.components.v2.component(
++    "snake_board_canvas",
++    html='<canvas width="600" height="600" role="img" aria-label="Live Snake board"></canvas>',
++    css="canvas {display:block; width:100%; aspect-ratio:1; border:1px solid #444; border-radius:6px; box-sizing:border-box;}",
++    js=_JS,
++)
++
++
++def render_game_canvas(state, *, show_grid=False, key="live_game_canvas"):
++    """Send a copied, JSON-safe board; never transmit image bytes."""
++    food = state.get("food")
++    data = {
++        "grid_size": int(state["grid_size"]),
++        "snake": [[int(x), int(y)] for x, y in state["snake"]],
++        "food": None if food is None else [int(food[0]), int(food[1])],
++        "direction": int(state.get("direction", 0)) % 4,
++        "game_over": bool(state.get("game_over", False)),
++        "show_grid": bool(show_grid),
++    }
++    if data["grid_size"] < 1:
++        raise ValueError("grid_size must be positive")
++    return _canvas(data=data, key=key, width="stretch", height="content")
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,4 +1,4 @@
+-streamlit>=1.37.0
++streamlit>=1.51.0
+ torch>=2.0.0
+ numpy>=1.24.0
+ plotly>=5.15.0
+--- /dev/null
++++ b/RENDERING_PATCH.md
+@@ -0,0 +1,21 @@
++# Rendering patch
++
++Apply render-game-and-charts.patch to main at commit 63abcfc or compatible code.
++This supersedes fix-fragment-layout.patch; do not apply both patches.
++
++    git apply --check render-game-and-charts.patch
++    git apply render-game-and-charts.patch
++    python -m pip install -r requirements.txt
++    python -m compileall -q app.py game_canvas.py
++    streamlit run app.py
++
++The game uses a Components v2 canvas with a fixed key and coordinate-only data.
++The PNG path remains only as a fallback when no board state exists.
++Charts own their fragment layout and all three are rendered on every tick.
++Existing history windows and Plotly uirevision settings are retained.
++
++This does not move training into a worker, change training schedules, or promise
++real-time frame rates. The caller may still construct an RGB frame before the
++canvas call. Benchmark and browser-test on the deployed Streamlit version.
++Check pause/resume, unchanged chart ticks, history reset, new agent, food=None,
++game over, different grid sizes, and browser resizing before deployment.
