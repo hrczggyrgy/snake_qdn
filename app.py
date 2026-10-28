@@ -201,6 +201,7 @@ def reset_game():
     st.session_state.current_action = None
     st.session_state.current_action_probs = None
     st.session_state.activations = None
+    st.session_state.decision_snapshot = None  # Clear previous decision
     
     # Get initial Q-values if agent exists
     if st.session_state.agent is not None:
@@ -218,19 +219,24 @@ def step_game(action=None):
     if st.session_state.game_over or st.session_state.env is None:
         return
     
+    # === GET ACTION FIRST (for automatic play) ===
+    if action is None and st.session_state.agent is not None:
+        action, selection_reason = st.session_state.agent.get_action_with_reason(
+            st.session_state.current_observation, 
+            training=st.session_state.training
+        )
+    elif action is not None:
+        # Manual action provided
+        selection_reason = "manual"
+    else:
+        action = 0  # Default: straight
+        selection_reason = "exploiting"
+    
     # === CAPTURE PRE-ACTION DECISION SNAPSHOT ===
     # This is what the agent saw and decided BEFORE stepping
     if st.session_state.agent is not None and st.session_state.current_observation is not None:
         pre_q_values = st.session_state.agent.get_q_values(st.session_state.current_observation)
         pre_action_probs = st.session_state.agent.get_action_probs(st.session_state.current_observation)
-        
-        # Determine selection reason
-        if st.session_state.training and random.random() < st.session_state.agent.epsilon:
-            selection_reason = "exploring"
-        elif action is not None:
-            selection_reason = "manual"
-        else:
-            selection_reason = "exploiting"
         
         # Store decision snapshot for visualization
         st.session_state.decision_snapshot = {
@@ -241,15 +247,6 @@ def step_game(action=None):
             'epsilon': st.session_state.agent.epsilon,
             'reason': selection_reason,
         }
-    
-    # Get action from agent if not provided
-    if action is None and st.session_state.agent is not None:
-        action = st.session_state.agent.get_action(
-            st.session_state.current_observation, 
-            training=st.session_state.training
-        )
-    elif action is None:
-        action = 0  # Default: straight
     
     # Step environment
     next_obs, reward, terminated, truncated, info = st.session_state.env.step(action)
@@ -301,6 +298,7 @@ def step_game(action=None):
             # Update agent's stats (authoritative source)
             if st.session_state.agent:
                 st.session_state.agent.update_stats(score)
+                st.session_state.agent.decay_epsilon()  # Decay epsilon after episode
                 # Dashboard mirrors agent's stats
                 st.session_state.training_stats['scores'] = st.session_state.agent.scores_history.copy()
                 st.session_state.training_stats['mean_scores'] = st.session_state.agent.mean_scores_history.copy()

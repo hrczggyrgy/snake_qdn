@@ -338,6 +338,62 @@ def test_save_load():
     print("  ✓ Save/Load test passed!\n")
 
 
+def test_epsilon_decay_on_episode_completion():
+    """Test that epsilon decays when episode completes (matches dashboard behavior)."""
+    print("Testing Epsilon Decay on Episode Completion...")
+    from agent import Agent
+    from snake_env import SnakeGameAI
+    
+    env = SnakeGameAI(grid_size=10)
+    agent = Agent(hidden_size=64, memory_size=1000, batch_size=32, 
+                  epsilon_start=1.0, epsilon_end=0.01, epsilon_decay=0.5)
+    
+    initial_epsilon = agent.epsilon
+    
+    # Simulate completing an episode
+    state, _ = env.reset()
+    done = False
+    while not done:
+        action = agent.get_action(state, training=True)
+        next_state, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
+        agent.remember(state, action, reward, next_state, terminated, truncated)
+        agent.train_short_memory(state, action, reward, next_state, terminated)
+        state = next_state
+    
+    # Dashboard behavior: calls update_stats() THEN decay_epsilon()
+    agent.update_stats(info['score'])
+    agent.decay_epsilon()
+    
+    expected_epsilon = max(0.01, initial_epsilon * 0.5)
+    assert abs(agent.epsilon - expected_epsilon) < 0.001, \
+        f"Expected epsilon={expected_epsilon:.4f}, got {agent.epsilon:.4f}"
+    
+    print(f"  ✓ Epsilon decayed from {initial_epsilon:.4f} to {agent.epsilon:.4f}")
+    
+    # Test second episode decay
+    agent.decay_epsilon()
+    expected_epsilon_2 = max(0.01, expected_epsilon * 0.5)
+    assert abs(agent.epsilon - expected_epsilon_2) < 0.001
+    
+    # Test that evaluation does NOT decay epsilon (dashboard doesn't call update_stats for eval)
+    eval_epsilon = agent.epsilon
+    state, _ = env.reset()
+    done = False
+    while not done:
+        action = agent.get_action(state, training=False)
+        next_state, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
+        state = next_state
+    
+    # Evaluation path in dashboard: does NOT call update_stats or decay_epsilon
+    # Just verify epsilon unchanged
+    assert agent.epsilon == eval_epsilon, "Evaluation should not change epsilon"
+    
+    env.close()
+    print("  ✓ Epsilon decay test passed!\n")
+
+
 if __name__ == "__main__":
     print("=" * 50)
     print("Running Snake DQN Module Tests")
@@ -352,6 +408,7 @@ if __name__ == "__main__":
         test_bootstrap_target()
         test_full_board_victory()
         test_save_load()
+        test_epsilon_decay_on_episode_completion()
         
         print("=" * 50)
         print("✅ ALL TESTS PASSED!")

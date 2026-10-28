@@ -135,6 +135,24 @@ class Agent:
         q_values = self.trainer.get_q_values(state)
         return int(np.argmax(q_values))
     
+    def get_action_with_reason(self, state: np.ndarray, training: bool = True) -> Tuple[int, str]:
+        """
+        Epsilon-greedy action selection with reason.
+        
+        Args:
+            state: Current observation (11,)
+            training: If True, use epsilon-greedy. If False, greedy.
+            
+        Returns:
+            Tuple of (action_index, reason) where reason is "exploring", "exploiting", or "manual"
+        """
+        if training and random.random() < self.epsilon:
+            return random.randint(0, 2), "exploring"
+        
+        # Greedy action
+        q_values = self.trainer.get_q_values(state)
+        return int(np.argmax(q_values)), "exploiting"
+    
     def get_action_probs(self, state: np.ndarray) -> np.ndarray:
         """Get action probabilities for visualization."""
         return self.trainer.get_action_probabilities(state)
