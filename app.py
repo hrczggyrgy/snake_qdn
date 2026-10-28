@@ -330,10 +330,8 @@ def step_game(action=None):
                 st.session_state.epsilon_history.clear()
                 st.session_state.epsilon_history.extend(st.session_state.agent.epsilon_history)
             
-        # Auto-reset for continuous training
-        if st.session_state.training:
-            time.sleep(0.1)  # Brief pause
-            reset_game()
+            # Note: Auto-reset handled by live_game_area fragment
+            # No sleep here to avoid blocking UI
 
 
 # ============================================================================
@@ -611,32 +609,31 @@ def render_network_architecture():
 
 
 def render_training_charts():
-    """Render compact training analytics charts."""
+    """Render compact training analytics charts - independent charts."""
     stats = st.session_state.training_stats
+    agent = st.session_state.agent
     
-    if not stats['scores']:
-        fig = go.Figure()
-        fig.add_annotation(x=0.5, y=0.5, text="No training data yet",
-                          showarrow=False, font=dict(color='gray', size=12),
-                          xref="paper", yref="paper")
-        fig.update_layout(height=180, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'))
-        return fig, fig, fig
-    
-    episodes = list(range(1, len(stats['scores']) + 1))
-    
-    # Score chart
-    fig_score = go.Figure()
-    fig_score.add_trace(go.Scatter(
-        x=episodes, y=stats['scores'], mode='lines', name='Score',
-        line=dict(color='#4488FF', width=1), opacity=0.7
-    ))
-    if stats['mean_scores']:
+    # ===== SCORE CHART =====
+    if stats['scores']:
+        episodes = list(range(1, len(stats['scores']) + 1))
+        fig_score = go.Figure()
         fig_score.add_trace(go.Scatter(
-            x=episodes, y=stats['mean_scores'], mode='lines', name='Avg(50)',
-            line=dict(color='#FFD700', width=2), opacity=0.9
+            x=episodes, y=stats['scores'], mode='lines', name='Score',
+            line=dict(color='#4488FF', width=1), opacity=0.7
         ))
+        if stats['mean_scores']:
+            fig_score.add_trace(go.Scatter(
+                x=episodes, y=stats['mean_scores'], mode='lines', name='Avg(50)',
+                line=dict(color='#FFD700', width=2), opacity=0.9
+            ))
+    else:
+        fig_score = go.Figure()
+        fig_score.add_annotation(x=0.5, y=0.5, text="No episodes completed",
+                              showarrow=False, font=dict(color='gray', size=12),
+                              xref="paper", yref="paper")
+    
     fig_score.update_layout(
-        title=dict(text="Scores", font=dict(size=11)),
+        title=dict(text="Scores per Episode", font=dict(size=11)),
         height=180, margin=dict(l=30, r=10, t=25, b=25),
         xaxis=dict(showgrid=True, gridcolor='rgba(100,100,100,0.15)', title=""),
         yaxis=dict(showgrid=True, gridcolor='rgba(100,100,100,0.15)', title=""),
@@ -645,40 +642,62 @@ def render_training_charts():
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9))
     )
     
-    # Loss chart
+    # ===== LOSS CHART - uses trainer's authoritative loss_history =====
     fig_loss = go.Figure()
-    if stats['loss']:
-        loss_x = list(range(1, len(stats['loss']) + 1))
-        fig_loss.add_trace(go.Scatter(
-            x=loss_x, y=stats['loss'], mode='lines', name='Loss',
-            line=dict(color='#FF6666', width=1), opacity=0.6
-        ))
-        if len(stats['loss']) > 10:
-            window = min(30, len(stats['loss']) // 10)
-            smoothed = pd.Series(stats['loss']).rolling(window, min_periods=1).mean()
-            fig_loss.add_trace(go.Scatter(
-                x=loss_x, y=smoothed, mode='lines', name=f'Smooth({window})',
-                line=dict(color='#FF0000', width=1.5), opacity=0.9
-            ))
+    if agent and agent.trainer.loss_history:
+        values = np.asarray(agent.trainer.loss_history, dtype=float)
+        if values.size:
+            last_step = agent.trainer.training_step
+            steps = np.arange(last_step - len(values) + 1, last_step + 1)
+            finite = np.isfinite(values)
+            
+            # Log axes cannot display zero. Plot positive finite values.
+            plotted = np.where(finite & (values > 0), values, np.nan)
+            
+            if np.any(np.isfinite(plotted)):
+                fig_loss.add_trace(go.Scatter(
+                    x=steps, y=plotted, mode='lines', name='Optimizer loss',
+                    line=dict(color='#FF6666', width=1), opacity=0.7
+                ))
+            else:
+                fig_loss.add_annotation(
+                    text="No positive finite losses for log scale",
+                    x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False,
+                    font=dict(color='gray', size=11)
+                )
+    else:
+        fig_loss.add_annotation(
+            text="No optimizer updates yet",
+            x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False,
+            font=dict(color='gray', size=12)
+        )
+    
     fig_loss.update_layout(
-        title=dict(text="Loss (log)", font=dict(size=11)),
-        height=180, margin=dict(l=30, r=10, t=25, b=25),
-        xaxis=dict(showgrid=True, gridcolor='rgba(100,100,100,0.15)', title=""),
-        yaxis=dict(type='log', showgrid=True, gridcolor='rgba(100,100,100,0.15)', title=""),
+        title=dict(text="Loss per Optimizer Update (log)", font=dict(size=11)),
+        height=180, margin=dict(l=40, r=10, t=25, b=30),
+        xaxis=dict(title="Optimizer Step", showgrid=True, gridcolor='rgba(100,100,100,0.15)'),
+        yaxis=dict(type='log', title="Loss", showgrid=True, gridcolor='rgba(100,100,100,0.15)'),
         plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
         font=dict(color='white', size=9),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9))
     )
     
-    # Epsilon chart
-    fig_eps = go.Figure()
+    # ===== EPSILON CHART =====
     if stats['epsilon']:
+        episodes = list(range(1, len(stats['epsilon']) + 1))
+        fig_eps = go.Figure()
         fig_eps.add_trace(go.Scatter(
             x=episodes, y=stats['epsilon'], mode='lines', name='ε',
             line=dict(color='#44FF88', width=1.5), fill='tozeroy', fillcolor='rgba(68,255,136,0.1)'
         ))
+    else:
+        fig_eps = go.Figure()
+        fig_eps.add_annotation(x=0.5, y=0.5, text="No epsilon history",
+                              showarrow=False, font=dict(color='gray', size=12),
+                              xref="paper", yref="paper")
+    
     fig_eps.update_layout(
-        title=dict(text="Epsilon", font=dict(size=11)),
+        title=dict(text="Exploration Rate (ε)", font=dict(size=11)),
         height=180, margin=dict(l=30, r=10, t=25, b=25),
         xaxis=dict(showgrid=True, gridcolor='rgba(100,100,100,0.15)', title=""),
         yaxis=dict(range=[0, 1.05], showgrid=True, gridcolor='rgba(100,100,100,0.15)', title=""),
@@ -816,81 +835,53 @@ def main():
         reset_game()
     
     # ============================================================================
-    # Compact Status Line
+    # Live Game Fragment (partial updates via st.fragment)
     # ============================================================================
-    agent = st.session_state.agent
-    stats = st.session_state.training_stats
-    gs = st.session_state.game_state
-    
-    score = gs['score'] if gs else 0
-    best = agent.high_score if agent else stats['high_score']
-    epsilon = agent.epsilon if agent else 1.0
-    episode = agent.n_games if agent else st.session_state.training_episode
-    steps = agent.total_steps if agent else 0
-    avg50 = stats['mean_scores'][-1] if stats['mean_scores'] else 0.0
-    
-    st.caption(
-        f"Ep {episode} · Total steps {steps:,} · "
-        f"Score {score} · Best {best} · "
-        f"ε {epsilon:.3f} · Avg₅₀ {avg50:.1f}"
+    # Calculate refresh interval based on speed and mode
+    _running = (
+        not st.session_state.paused
+        and not st.session_state.step_mode
     )
-    
-    # ============================================================================
-    # Main Layout: Game (40%) + Charts (60%)
-    # ============================================================================
-    game_col, charts_col = st.columns([2, 3], gap="small")
-    
-    # ----- LEFT COLUMN: LIVE GAME ARENA -----
-    with game_col:
-        # Game render - autosize to container
-        fig_game = render_game_grid()
-        fig_game.update_layout(autosize=True, width=None, height=400)
-        st.plotly_chart(
-            fig_game,
-            use_container_width=True,
-            key="live_game",
-            config={"displayModeBar": False},
-        )
+    _refresh_seconds = (
+        max(0.1, st.session_state.speed / 1000.0)
+        if _running else None
+    )
+
+    @st.fragment(run_every=_refresh_seconds)
+    def live_game_area():
+        """Render game board and auto-step. Runs independently of main page."""
+        state = st.session_state
         
-        # Game info
-        if st.session_state.game_state:
-            info = st.session_state.game_state
-            head = info['snake'][0] if info['snake'] else (0, 0)
-            dirs = ['→', '↓', '←', '↑']
-            st.caption(f"Length: {len(info['snake'])} | Head: {head} | Food: {info['food']} | Dir: {dirs[info['direction']]}")
-        
-        # Controls row
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            if st.button("▶️ Play" if st.session_state.paused else "⏸️ Pause", use_container_width=True, key="play_pause"):
-                st.session_state.paused = not st.session_state.paused
-                st.rerun()
-        with c2:
-            if st.button("⏭️ Step", use_container_width=True, disabled=not st.session_state.step_mode, key="step_btn"):
+        # Auto-step logic (inside fragment)
+        if not state.paused and not state.step_mode:
+            if not state.game_over:
                 step_game()
-                st.rerun()
-        with c3:
-            if st.button("🔄 Reset", use_container_width=True, key="reset_btn"):
+            elif state.training:
                 reset_game()
-                st.rerun()
-        with c4:
-            st.write("")
+            else:
+                state.paused = True
         
-        # Manual controls when paused
-        if st.session_state.paused and not st.session_state.game_over:
-            mc1, mc2, mc3 = st.columns(3)
-            with mc1:
-                if st.button("⬆️ Straight", use_container_width=True, key="manual_straight"):
-                    step_game(0); st.rerun()
-            with mc2:
-                if st.button("➡️ Right", use_container_width=True, key="manual_right"):
-                    step_game(1); st.rerun()
-            with mc3:
-                if st.button("⬅️ Left", use_container_width=True, key="manual_left"):
-                    step_game(2); st.rerun()
-    
-    # ----- RIGHT COLUMN: LEARNING CHARTS -----
-    with charts_col:
+        # Render game using RGB image (not Plotly)
+        if state.env is not None:
+            frame = state.env.render()
+            if frame is not None:
+                st.image(frame, use_container_width=True)
+        
+        # Status caption (updates on fragment refresh)
+        if state.agent is not None and state.game_state is not None:
+            st.caption(
+                f"Ep {state.agent.n_games} · "
+                f"Score {state.game_state['score']} · "
+                f"Best {state.agent.high_score} · "
+                f"ε {state.agent.epsilon:.3f}"
+            )
+
+    # Chart fragment - refreshes every 500ms when running
+    _chart_refresh = 0.5 if _running else None
+
+    @st.fragment(run_every=_chart_refresh)
+    def live_charts_area():
+        """Render learning charts. Updates independently of game fragment."""
         score_fig, loss_fig, epsilon_fig = render_training_charts()
         
         # Score chart (full width)
@@ -922,11 +913,61 @@ def main():
                 key="live_epsilon",
                 config={"displayModeBar": False},
             )
+
+    # ============================================================================
+    # Main Layout: Game (40%) + Charts (60%)
+    # ============================================================================
+    game_col, charts_col = st.columns([2, 3], gap="small")
     
-    # ============================================================================
-    # Network Details (conditional on toggle)
-    # ============================================================================
-    if st.session_state.get('show_network', False):
+    # ----- LEFT COLUMN: LIVE GAME ARENA -----
+    with game_col:
+        # Live game fragment (auto-updates)
+        live_game_area()
+        
+        # Controls row (outside fragment - user interactions trigger full rerun)
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            if st.button("▶️ Play" if st.session_state.paused else "⏸️ Pause", use_container_width=True, key="play_pause"):
+                st.session_state.paused = not st.session_state.paused
+                st.rerun()
+        with c2:
+            if st.button("⏭️ Step", use_container_width=True, disabled=not st.session_state.step_mode, key="step_btn"):
+                step_game()
+                st.rerun()
+        with c3:
+            if st.button("🔄 Reset", use_container_width=True, key="reset_btn"):
+                reset_game()
+                st.rerun()
+        with c4:
+            st.write("")
+        
+        # Manual controls when paused
+        if st.session_state.paused and not st.session_state.game_over:
+            mc1, mc2, mc3 = st.columns(3)
+            with mc1:
+                if st.button("⬆️ Straight", use_container_width=True, key="manual_straight"):
+                    step_game(0); st.rerun()
+            with mc2:
+                if st.button("➡️ Right", use_container_width=True, key="manual_right"):
+                    step_game(1); st.rerun()
+            with mc3:
+                if st.button("⬅️ Left", use_container_width=True, key="manual_left"):
+                    step_game(2); st.rerun()
+    
+    # ----- RIGHT COLUMN: LEARNING CHARTS -----
+    with charts_col:
+        # Live charts fragment (auto-updates)
+        live_charts_area()
+    
+    # Network Details Fragment (independent refresh when enabled)
+    _net_refresh = 1.0 if (st.session_state.get('show_network', False) and _running) else None
+
+    @st.fragment(run_every=_net_refresh)
+    def live_network_area():
+        """Render network details. Updates independently when enabled."""
+        if not st.session_state.get('show_network', False):
+            return
+            
         with st.expander("▸ Neural-network details", expanded=True):
             # State Vector
             st.write("**State Vector (11D)**")
@@ -1017,21 +1058,12 @@ def main():
                         st.success(f"🎯 **Exploiting** (ε={epsilon:.3f}): {action_label} = argmax Q")
                 else:
                     st.info("No decision data yet")
-    
+
     # ============================================================================
-    # Auto-step logic (AFTER all rendering)
+    # Network Details (conditional on toggle - fragment renders itself)
     # ============================================================================
-    if not st.session_state.paused and not st.session_state.game_over:
-        step_game()
-        time.sleep(st.session_state.speed / 1000.0)
-        st.rerun()
-    elif not st.session_state.paused and st.session_state.game_over:
-        if st.session_state.training:
-            reset_game()
-            time.sleep(0.1)
-            st.rerun()
-        else:
-            st.session_state.paused = True
+    if st.session_state.get('show_network', False):
+        live_network_area()
 
 if __name__ == "__main__":
     main()
