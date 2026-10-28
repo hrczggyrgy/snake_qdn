@@ -241,6 +241,22 @@ class QTrainer:
         probs = F.softmax(torch.FloatTensor(scaled_q), dim=0).numpy()
         return probs
     
+    @staticmethod
+    def probabilities_from_q_values(q_values: np.ndarray, temperature: float = 1.0) -> np.ndarray:
+        """Compute action probabilities from existing Q-values (no forward pass).
+        
+        Args:
+            q_values: Q-values array of shape (3,)
+            temperature: Softmax temperature
+            
+        Returns:
+            Action probabilities (3,)
+        """
+        scaled_q = np.asarray(q_values, dtype=np.float64) / temperature
+        scaled_q -= scaled_q.max()  # Numerical stability
+        weights = np.exp(scaled_q)
+        return weights / weights.sum()
+    
     def save_checkpoint(self, file_path: str, episode: int, epsilon: float, 
                         high_score: int, avg_score: float) -> None:
         """Save full training checkpoint."""

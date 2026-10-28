@@ -269,12 +269,25 @@ def reset_game():
     # Get initial Q-values if agent exists
     if st.session_state.agent is not None:
         st.session_state.current_q_values = st.session_state.agent.get_q_values(obs)
-        st.session_state.current_action_probs = st.session_state.agent.get_action_probs(obs)
-        # Move input to model's device for activation extraction
-        device = st.session_state.agent.trainer.device
-        obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(device)
-        acts = st.session_state.agent.model.get_activations(obs_tensor)
-        st.session_state.activations = acts
+        # Compute probabilities from Q-values (no extra forward pass)
+        st.session_state.current_action_probs = st.session_state.agent.trainer.probabilities_from_q_values(
+            st.session_state.current_q_values
+        )
+        # Move input to model's device for activation extraction (only when network shown)
+        if st.session_state.get('show_network', False):
+            device = st.session_state.agent.trainer.device
+            obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(device)
+            model = st.session_state.agent.model
+            was_training = model.training
+            model.eval()
+            try:
+                with torch.inference_mode():
+                    acts = model.get_activations(obs_tensor)
+                st.session_state.activations = acts
+            finally:
+                model.train(was_training)
+        else:
+            st.session_state.activations = None
 
 
 def step_game(action=None):
@@ -299,7 +312,8 @@ def step_game(action=None):
     # This is what the agent saw and decided BEFORE stepping
     if st.session_state.agent is not None and st.session_state.current_observation is not None:
         pre_q_values = st.session_state.agent.get_q_values(st.session_state.current_observation)
-        pre_action_probs = st.session_state.agent.get_action_probs(st.session_state.current_observation)
+        # Compute probabilities from Q-values (no extra forward pass)
+        pre_action_probs = st.session_state.agent.trainer.probabilities_from_q_values(pre_q_values)
         
         # Store decision snapshot for visualization
         st.session_state.decision_snapshot = {
@@ -345,12 +359,26 @@ def step_game(action=None):
     # Update Q-values and activations for NEXT state visualization
     if st.session_state.agent is not None:
         st.session_state.current_q_values = st.session_state.agent.get_q_values(next_obs)
-        st.session_state.current_action_probs = st.session_state.agent.get_action_probs(next_obs)
-        # Move input to model's device for activation extraction
-        device = st.session_state.agent.trainer.device
-        next_obs_tensor = torch.FloatTensor(next_obs).unsqueeze(0).to(device)
-        acts = st.session_state.agent.model.get_activations(next_obs_tensor)
-        st.session_state.activations = acts
+        # Compute probabilities from Q-values (no extra forward pass)
+        st.session_state.current_action_probs = st.session_state.agent.trainer.probabilities_from_q_values(
+            st.session_state.current_q_values
+        )
+        # Move input to model's device for activation extraction (only when network shown)
+        if st.session_state.get('show_network', False):
+            device = st.session_state.agent.trainer.device
+            next_obs_tensor = torch.FloatTensor(next_obs).unsqueeze(0).to(device)
+            # Use eval mode and inference_mode for visualization
+            model = st.session_state.agent.model
+            was_training = model.training
+            model.eval()
+            try:
+                with torch.inference_mode():
+                    acts = model.get_activations(next_obs_tensor)
+                st.session_state.activations = acts
+            finally:
+                model.train(was_training)
+        else:
+            st.session_state.activations = None
     
     # If episode ended, update stats
     if done:
@@ -662,15 +690,19 @@ def render_training_charts():
     
     # ===== SCORE CHART =====
     if stats['scores']:
-        episodes = list(range(1, len(stats['scores']) + 1))
+        # Limit displayed history to last 500 episodes
+        display_scores = stats['scores'][-500:]
+        display_means = stats['mean_scores'][-500:]
+        episodes = list(range(len(stats['scores']) - len(display_scores) + 1, len(stats['scores']) + 1))
+        
         fig_score = go.Figure()
         fig_score.add_trace(go.Scatter(
-            x=episodes, y=stats['scores'], mode='lines', name='Score',
+            x=episodes, y=display_scores, mode='lines', name='Score',
             line=dict(color='#4488FF', width=1), opacity=0.7
         ))
-        if stats['mean_scores']:
+        if display_means:
             fig_score.add_trace(go.Scatter(
-                x=episodes, y=stats['mean_scores'], mode='lines', name='Avg(50)',
+                x=episodes, y=display_means, mode='lines', name='Avg(50)',
                 line=dict(color='#FFD700', width=2), opacity=0.9
             ))
     else:
@@ -686,13 +718,17 @@ def render_training_charts():
         yaxis=dict(showgrid=True, gridcolor='rgba(100,100,100,0.15)', title=""),
         plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
         font=dict(color='white', size=9),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9))
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9)),
+        uirevision="snake-scores",  # Preserve Plotly state (zoom/pan)
     )
     
     # ===== LOSS CHART - uses trainer's authoritative loss_history =====
     fig_loss = go.Figure()
     if agent and agent.trainer.loss_history:
         values = np.asarray(agent.trainer.loss_history, dtype=float)
+        # Limit displayed history to last 1000 optimizer steps
+        window = 1000
+        values = values[-window:]
         if values.size:
             last_step = agent.trainer.training_step
             steps = np.arange(last_step - len(values) + 1, last_step + 1)
@@ -726,15 +762,17 @@ def render_training_charts():
         yaxis=dict(type='log', title="Loss", showgrid=True, gridcolor='rgba(100,100,100,0.15)'),
         plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
         font=dict(color='white', size=9),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9))
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9)),
+        uirevision="snake-loss",  # Preserve Plotly state (zoom/pan)
     )
     
     # ===== EPSILON CHART =====
     if stats['epsilon']:
-        episodes = list(range(1, len(stats['epsilon']) + 1))
+        display_eps = stats['epsilon'][-500:]
+        episodes = list(range(len(stats['epsilon']) - len(display_eps) + 1, len(stats['epsilon']) + 1))
         fig_eps = go.Figure()
         fig_eps.add_trace(go.Scatter(
-            x=episodes, y=stats['epsilon'], mode='lines', name='ε',
+            x=episodes, y=display_eps, mode='lines', name='ε',
             line=dict(color='#44FF88', width=1.5), fill='tozeroy', fillcolor='rgba(68,255,136,0.1)'
         ))
     else:
@@ -749,7 +787,8 @@ def render_training_charts():
         xaxis=dict(showgrid=True, gridcolor='rgba(100,100,100,0.15)', title=""),
         yaxis=dict(range=[0, 1.05], showgrid=True, gridcolor='rgba(100,100,100,0.15)', title=""),
         plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='white', size=9)
+        font=dict(color='white', size=9),
+        uirevision="snake-epsilon",  # Preserve Plotly state (zoom/pan)
     )
     
     return fig_score, fig_loss, fig_eps
@@ -993,43 +1032,88 @@ def main():
                 f"ε {state.agent.epsilon:.3f}"
             )
 
-    # Chart fragment - refreshes every 500ms when running
-    _chart_refresh = 0.5 if _running else None
+    # Chart fragment - refreshes every 1 second when running (reduced from 0.5s)
+    _chart_refresh = 1.0 if _running else None
 
-    @st.fragment(run_every=_chart_refresh)
+    # Persistent chart placeholders (created once, updated by fragment)
+    score_slot = st.empty()
+    loss_col, epsilon_col = st.columns(2, gap="small")
+    loss_slot = loss_col.empty()
+    epsilon_slot = epsilon_col.empty()
+
+    # Track chart data versions for change detection
+    if "chart_versions" not in st.session_state:
+        st.session_state.chart_versions = {"scores": 0, "loss": 0, "epsilon": 0}
+
+    @st.fragment(run_every=1.0 if _running else None)
     def live_charts_area():
         """Render learning charts. Updates independently of game fragment."""
-        score_fig, loss_fig, epsilon_fig = render_training_charts()
-        
-        # Score chart (full width)
-        score_fig.update_layout(height=220, autosize=True, width=None)
-        st.plotly_chart(
-            score_fig,
-            use_container_width=True,
-            key="live_scores",
-            config={"displayModeBar": False},
-        )
-        
-        # Loss + Epsilon side by side
-        loss_col, epsilon_col = st.columns(2, gap="small")
-        
-        loss_fig.update_layout(height=160, autosize=True, width=None)
-        with loss_col:
-            st.plotly_chart(
-                loss_fig,
-                use_container_width=True,
-                key="live_loss",
-                config={"displayModeBar": False},
+        stats = st.session_state.training_stats
+        agent = st.session_state.agent
+
+        # Compute version tuples for change detection
+        versions = {
+            "scores": (len(stats["scores"]), len(stats["mean_scores"])),
+            "loss": agent.trainer.training_step if agent else 0,
+            "epsilon": (len(stats["epsilon"]), agent.epsilon if agent else None),
+        }
+
+        # Check which charts need updating
+        changed = {
+            name for name, version in versions.items()
+            if st.session_state.chart_versions.get(name) != version
+        }
+
+        if not changed:
+            return
+
+        # Build only the changed charts
+        figures = dict(zip(
+            ("scores", "loss", "epsilon"),
+            render_training_charts(),
+        ))
+
+        slots = {
+            "scores": score_slot,
+            "loss": st.session_state.get("_loss_slot", loss_col.empty()),
+            "epsilon": st.session_state.get("_epsilon_slot", epsilon_col.empty()),
+        }
+
+        # Store slots in session state for persistence
+        st.session_state._loss_slot = loss_col.empty()
+        st.session_state._epsilon_slot = epsilon_col.empty()
+
+        for name in ("scores", "loss", "epsilon"):
+            if name not in changed:
+                continue
+
+            fig = figures[name]
+            fig.update_layout(
+                height=220 if name == "scores" else 180,
+                autosize=True,
+                width=None,
+                uirevision=f"snake-{name}",  # Preserve Plotly state (zoom/pan)
+                transition_duration=0,
             )
-        
-        epsilon_fig.update_layout(height=160, autosize=True, width=None)
-        with epsilon_col:
-            st.plotly_chart(
-                epsilon_fig,
-                use_container_width=True,
-                key="live_epsilon",
-                config={"displayModeBar": False},
-            )
+
+            if name == "scores":
+                slots[name].plotly_chart(
+                    fig, use_container_width=True, key=f"live_{name}",
+                    config={"displayModeBar": False}
+                )
+            elif name == "loss":
+                st.session_state._loss_slot.plotly_chart(
+                    fig, use_container_width=True, key=f"live_{name}",
+                    config={"displayModeBar": False}
+                )
+            else:  # epsilon
+                st.session_state._epsilon_slot.plotly_chart(
+                    fig, use_container_width=True, key=f"live_{name}",
+                    config={"displayModeBar": False}
+                )
+
+        # Update tracked versions
+        st.session_state.chart_versions.update(versions)
 
     # ============================================================================
     # Main Layout: Game (40%) + Charts (60%)
