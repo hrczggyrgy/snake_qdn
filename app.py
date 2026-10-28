@@ -13,12 +13,21 @@ import torch
 import time
 import json
 import random
+import base64
 from pathlib import Path
 from collections import deque
+from io import BytesIO
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import pandas as pd
+
+# PIL for inline PNG encoding
+try:
+    from PIL import Image
+    _PIL_AVAILABLE = True
+except ImportError:
+    _PIL_AVAILABLE = False
 
 # Import our modules
 from snake_env import SnakeGameAI
@@ -94,6 +103,45 @@ st.markdown("""
 
 
 # ============================================================================
+# Game Frame Display (inline PNG for reliable rendering)
+# ============================================================================
+def display_game_frame(frame):
+    """Display game frame using inline PNG to avoid Streamlit media delivery issues."""
+    if frame is None:
+        st.error("The environment returned no game frame.")
+        return
+
+    if frame.dtype != np.uint8 or frame.ndim != 3 or frame.shape[2] != 3:
+        st.error(
+            f"Invalid game frame: shape={frame.shape}, dtype={frame.dtype}"
+        )
+        return
+
+    if not _PIL_AVAILABLE:
+        st.error("PIL not available for inline PNG encoding")
+        return
+
+    buffer = BytesIO()
+    Image.fromarray(frame).save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    height, width = frame.shape[:2]
+
+    st.markdown(
+        f"""
+        <div style="width:100%;aspect-ratio:{width}/{height};
+                    background:#1e1e28;overflow:hidden;border:1px solid #333;border-radius:4px">
+          <img src="data:image/png;base64,{encoded}"
+               alt="Live Snake board"
+               width="{width}" height="{height}"
+               style="display:block;width:100%;height:100%;
+                      object-fit:contain;image-rendering:pixelated">
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================================
 # Session State Initialization
 # ============================================================================
 def init_session_state():
@@ -144,9 +192,8 @@ def init_session_state():
         
         # UI Controls
         'speed': 50,  # ms per frame
-        'step_mode': False,
-        'show_grid': True,
-        'training_mode': 'Watch',  # Watch / Train fast / Evaluate
+        'speed_preset': 'Watch',  # Watch / Normal / Fast / Max
+        'activity': 'Train',  # Train / Evaluate / Manual
         'show_network': False,
         
         # Visualization Data
@@ -760,53 +807,125 @@ def main():
         
         # Training Controls
         with st.expander("🏋️ Training", expanded=True):
-            # Training mode selector
-            st.session_state.training_mode = st.radio(
-                "Mode",
-                ["Watch", "Train fast", "Evaluate"],
-                index=["Watch", "Train fast", "Evaluate"].index(st.session_state.get('training_mode', 'Watch')),
+            # Activity selector - determines who acts and whether learning happens
+            activity_options = ["Train", "Evaluate", "Manual"]
+            activity_labels = {
+                "Train": "🧠 Train — Agent learns while playing",
+                "Evaluate": "📊 Evaluate — Greedy policy, no learning",
+                "Manual": "👤 Manual — You control the snake",
+            }
+            st.session_state.activity = st.radio(
+                "Activity",
+                activity_options,
+                index=activity_options.index(st.session_state.get('activity', 'Train')),
+                format_func=lambda x: activity_labels[x],
                 horizontal=True,
-                help="Watch: slow enough to follow | Train fast: batches between refreshes | Evaluate: greedy policy, no learning"
             )
             
+            # Speed presets for Train/Evaluate modes
+            if st.session_state.activity != "Manual":
+                speed_options = {
+                    "Watch": 0.1,      # 100ms - slow enough to follow
+                    "Normal": 0.05,    # 50ms - normal speed
+                    "Fast": 0.01,      # 10ms - fast training
+                    "Max": 0.0,        # 0ms - maximum speed
+                }
+                st.session_state.speed_preset = st.radio(
+                    "Playback speed",
+                    list(speed_options.keys()),
+                    index=list(speed_options.keys()).index(st.session_state.get('speed_preset', 'Watch')),
+                    horizontal=True,
+                )
+                st.session_state.speed = speed_options[st.session_state.speed_preset]
+            
+            # Main control button
+            is_running = st.session_state.get('activity') == "Train" and st.session_state.training
+            is_paused = st.session_state.paused
+            
+            if st.session_state.activity == "Train":
+                if not st.session_state.training:
+                    if st.button("▶️ Start training", use_container_width=True, type="primary"):
+                        if st.session_state.agent is None: st.session_state.agent = create_agent()
+                        if st.session_state.env is None: st.session_state.env = create_env()
+                        st.session_state.training = True
+                        st.session_state.paused = False
+                        reset_game()
+                        st.rerun()
+                elif is_paused:
+                    if st.button("▶️ Resume training", use_container_width=True, type="primary"):
+                        st.session_state.paused = False
+                        st.rerun()
+                else:
+                    if st.button("⏸️ Pause training", use_container_width=True):
+                        st.session_state.paused = True
+                        st.rerun()
+            
+            elif st.session_state.activity == "Evaluate":
+                if not st.session_state.training:
+                    if st.button("▶️ Start evaluation", use_container_width=True):
+                        if st.session_state.agent is None: st.session_state.agent = create_agent()
+                        if st.session_state.env is None: st.session_state.env = create_env()
+                        st.session_state.training = False
+                        st.session_state.paused = False
+                        reset_game()
+                        st.rerun()
+                elif is_paused:
+                    if st.button("▶️ Resume evaluation", use_container_width=True):
+                        st.session_state.paused = False
+                        st.rerun()
+                else:
+                    if st.button("⏸️ Pause evaluation", use_container_width=True):
+                        st.session_state.paused = True
+                        st.rerun()
+            
+            else:  # Manual
+                if not st.session_state.paused:
+                    if st.button("⏸️ Pause", use_container_width=True):
+                        st.session_state.paused = True
+                        st.rerun()
+            
+            # Step once button (only when paused)
+            if st.session_state.paused:
+                if st.button("⏭️ Step once", use_container_width=True):
+                    step_game()
+                    st.rerun()
+            
+            # Reset buttons - clearly labeled
+            st.divider()
             c1, c2 = st.columns(2)
             with c1:
-                if st.button("▶️ Start Training", use_container_width=True, disabled=st.session_state.training):
-                    if st.session_state.agent is None: st.session_state.agent = create_agent()
-                    if st.session_state.env is None: st.session_state.env = create_env()
-                    st.session_state.training = True
-                    st.session_state.paused = False
+                if st.button("🔄 Restart board", use_container_width=True, help="Restart current game, keep learned weights and training history"):
                     reset_game()
                     st.rerun()
             with c2:
-                if st.button("⏹️ Stop Training", use_container_width=True, disabled=not st.session_state.training):
-                    st.session_state.training = False
-                    st.session_state.paused = True
+                if st.button("🗑️ Clear training history", use_container_width=True, help="Clear displayed charts and statistics, keep model weights"):
+                    if st.session_state.agent: st.session_state.agent.reset_stats()
+                    st.session_state.training_stats = {'scores': [], 'mean_scores': [], 'epsilon': [], 'loss': [], 'high_score': 0}
+                    st.session_state.training_episode = 0
+                    st.session_state.score_history.clear()
+                    st.session_state.mean_score_history.clear()
+                    st.session_state.loss_history.clear()
+                    st.session_state.epsilon_history.clear()
                     st.rerun()
             
-            if st.button("🔄 Reset Stats", use_container_width=True):
-                if st.session_state.agent: st.session_state.agent.reset_stats()
-                st.session_state.training_stats = {'scores': [], 'mean_scores': [], 'epsilon': [], 'loss': [], 'high_score': 0}
-                st.session_state.training_episode = 0
-                st.session_state.score_history.clear()
-                st.session_state.mean_score_history.clear()
-                st.session_state.loss_history.clear()
-                st.session_state.epsilon_history.clear()
+            # New agent / environment reset
+            st.divider()
+            if st.button("🆕 Start new training run", use_container_width=True, help="Create fresh agent and replay buffer, discard current model"):
+                st.session_state.agent = create_agent()
+                reset_game()
+                st.success("New training run started")
                 st.rerun()
-            
-            st.session_state.speed = st.slider("Speed (ms/frame)", 0, 200, st.session_state.speed, 10)
-            st.session_state.step_mode = st.checkbox("Step Mode", st.session_state.step_mode)
             
             st.divider()
             save_path = st.text_input("Checkpoint Path", "checkpoints/snake_dqn.pth")
             c1, c2 = st.columns(2)
             with c1:
-                if st.button("💾 Save", use_container_width=True):
+                if st.button("💾 Save checkpoint", use_container_width=True):
                     if st.session_state.agent:
                         st.session_state.agent.save_checkpoint(save_path)
                         st.success("Saved!")
             with c2:
-                if st.button("📂 Load", use_container_width=True):
+                if st.button("📂 Load checkpoint", use_container_width=True):
                     if st.session_state.agent is None: st.session_state.agent = create_agent()
                     try:
                         info = st.session_state.agent.load_checkpoint(save_path)
@@ -820,9 +939,8 @@ def main():
         
         # Display Settings
         with st.expander("🎨 Display", expanded=False):
-            st.session_state.show_grid = st.checkbox("Show Grid", st.session_state.show_grid)
             st.session_state.show_network = st.checkbox("Show network internals", st.session_state.get('show_network', False))
-            if st.button("🎮 New Game", use_container_width=True):
+            if st.button("🎮 New Game", use_container_width=True, help="Restart board (same as Restart board above)"):
                 reset_game()
                 st.rerun()
     
@@ -837,14 +955,13 @@ def main():
     # ============================================================================
     # Live Game Fragment (partial updates via st.fragment)
     # ============================================================================
-    # Calculate refresh interval based on speed and mode
+    # Calculate refresh interval based on speed and activity
     _running = (
         not st.session_state.paused
-        and not st.session_state.step_mode
+        and st.session_state.activity != "Manual"
     )
     _refresh_seconds = (
-        max(0.1, st.session_state.speed / 1000.0)
-        if _running else None
+        st.session_state.speed if _running else None
     )
 
     @st.fragment(run_every=_refresh_seconds)
@@ -853,7 +970,7 @@ def main():
         state = st.session_state
         
         # Auto-step logic (inside fragment)
-        if not state.paused and not state.step_mode:
+        if not state.paused and state.activity != "Manual":
             if not state.game_over:
                 step_game()
             elif state.training:
@@ -861,11 +978,11 @@ def main():
             else:
                 state.paused = True
         
-        # Render game using RGB image (not Plotly)
+        # Render game using RGB image (inline PNG for reliable rendering)
         if state.env is not None:
             frame = state.env.render()
             if frame is not None:
-                st.image(frame, use_container_width=True)
+                display_game_frame(frame)
         
         # Status caption (updates on fragment refresh)
         if state.agent is not None and state.game_state is not None:
@@ -924,34 +1041,98 @@ def main():
         # Live game fragment (auto-updates)
         live_game_area()
         
+        # State indicator
+        activity = st.session_state.activity
+        is_training = st.session_state.training and activity == "Train"
+        is_paused = st.session_state.paused
+        
+        if activity == "Train":
+            if not is_training:
+                status_text = "🟡 Train · Ready"
+            elif is_paused:
+                status_text = "🟡 Train · Paused"
+            else:
+                status_text = "🟢 Train · Running"
+        elif activity == "Evaluate":
+            if is_paused:
+                status_text = "🔵 Evaluate · Paused"
+            else:
+                status_text = "🔵 Evaluate · Running"
+        else:  # Manual
+            if is_paused:
+                status_text = "⚪ Manual · Paused"
+            else:
+                status_text = "⚪ Manual · Running"
+        
+        st.caption(status_text)
+        
         # Controls row (outside fragment - user interactions trigger full rerun)
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         with c1:
-            if st.button("▶️ Play" if st.session_state.paused else "⏸️ Pause", use_container_width=True, key="play_pause"):
-                st.session_state.paused = not st.session_state.paused
-                st.rerun()
+            if activity == "Train":
+                if not st.session_state.training:
+                    if st.button("▶️ Start training", use_container_width=True, type="primary", key="play_pause"):
+                        if st.session_state.agent is None: st.session_state.agent = create_agent()
+                        if st.session_state.env is None: st.session_state.env = create_env()
+                        st.session_state.training = True
+                        st.session_state.paused = False
+                        reset_game()
+                        st.rerun()
+                elif is_paused:
+                    if st.button("▶️ Resume", use_container_width=True, type="primary", key="play_pause"):
+                        st.session_state.paused = False
+                        st.rerun()
+                else:
+                    if st.button("⏸️ Pause", use_container_width=True, key="play_pause"):
+                        st.session_state.paused = True
+                        st.rerun()
+            elif activity == "Evaluate":
+                if not st.session_state.training:
+                    if st.button("▶️ Start evaluation", use_container_width=True, type="primary", key="play_pause"):
+                        if st.session_state.agent is None: st.session_state.agent = create_agent()
+                        if st.session_state.env is None: st.session_state.env = create_env()
+                        st.session_state.training = False
+                        st.session_state.paused = False
+                        reset_game()
+                        st.rerun()
+                elif is_paused:
+                    if st.button("▶️ Resume", use_container_width=True, type="primary", key="play_pause"):
+                        st.session_state.paused = False
+                        st.rerun()
+                else:
+                    if st.button("⏸️ Pause", use_container_width=True, key="play_pause"):
+                        st.session_state.paused = True
+                        st.rerun()
+            else:  # Manual
+                if not is_paused:
+                    if st.button("⏸️ Pause", use_container_width=True, key="play_pause"):
+                        st.session_state.paused = True
+                        st.rerun()
+        
         with c2:
-            if st.button("⏭️ Step", use_container_width=True, disabled=not st.session_state.step_mode, key="step_btn"):
-                step_game()
-                st.rerun()
+            if st.session_state.paused:
+                if st.button("⏭️ Step once", use_container_width=True, key="step_btn"):
+                    step_game()
+                    st.rerun()
+            else:
+                st.button("⏭️ Step once", use_container_width=True, disabled=True, key="step_btn")
+        
         with c3:
-            if st.button("🔄 Reset", use_container_width=True, key="reset_btn"):
+            if st.button("🔄 Restart board", use_container_width=True, key="reset_btn", help="Restart current game, keep learned weights"):
                 reset_game()
                 st.rerun()
-        with c4:
-            st.write("")
         
-        # Manual controls when paused
-        if st.session_state.paused and not st.session_state.game_over:
+        # Manual controls when paused (Manual activity only)
+        if st.session_state.activity == "Manual" and st.session_state.paused and not st.session_state.game_over:
             mc1, mc2, mc3 = st.columns(3)
             with mc1:
                 if st.button("⬆️ Straight", use_container_width=True, key="manual_straight"):
                     step_game(0); st.rerun()
             with mc2:
-                if st.button("➡️ Right", use_container_width=True, key="manual_right"):
+                if st.button("➡️ Turn right", use_container_width=True, key="manual_right"):
                     step_game(1); st.rerun()
             with mc3:
-                if st.button("⬅️ Left", use_container_width=True, key="manual_left"):
+                if st.button("⬅️ Turn left", use_container_width=True, key="manual_left"):
                     step_game(2); st.rerun()
     
     # ----- RIGHT COLUMN: LEARNING CHARTS -----
