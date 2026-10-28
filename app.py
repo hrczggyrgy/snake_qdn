@@ -27,6 +27,20 @@ from agent import Agent, ReplayMemory, train_agent, evaluate_agent
 
 
 # ============================================================================
+# Streamlit Version Compatibility
+# ============================================================================
+try:
+    _ST_VERSION = tuple(map(int, st.__version__.split('.')[:2]))
+except:
+    _ST_VERSION = (1, 28)
+
+def btn_full(label, **kwargs):
+    """Button with full-width compatibility across Streamlit versions."""
+    # Streamlit 1.33+ supports use_container_width, older versions use_container_width also works
+    return st.button(label, use_container_width=True, **kwargs)
+
+
+# ============================================================================
 # Page Configuration
 # ============================================================================
 st.set_page_config(
@@ -132,6 +146,8 @@ def init_session_state():
         'speed': 50,  # ms per frame
         'step_mode': False,
         'show_grid': True,
+        'training_mode': 'Watch',  # Watch / Train fast / Evaluate
+        'show_network': False,
         
         # Visualization Data
         'score_history': deque(maxlen=500),
@@ -690,7 +706,7 @@ def main():
             food_reward = st.number_input("Food Reward", 0.0, 100.0, st.session_state.env_config['food_reward'], 1.0)
             death_penalty = st.number_input("Death Penalty", -100.0, 0.0, st.session_state.env_config['death_penalty'], 1.0)
             
-            if st.button("Apply Environment Settings", width='stretch'):
+            if st.button("Apply Environment Settings", use_container_width=True):
                 st.session_state.env_config.update({
                     'grid_size': grid_size, 'step_penalty': step_penalty,
                     'food_reward': food_reward, 'death_penalty': death_penalty
@@ -712,7 +728,7 @@ def main():
             memory_size = st.selectbox("Memory Size", [10000, 50000, 100000, 200000], index=[10000, 50000, 100000, 200000].index(st.session_state.agent_config['memory_size']))
             batch_size = st.selectbox("Batch Size", [256, 512, 1000, 2048], index=[256, 512, 1000, 2048].index(st.session_state.agent_config['batch_size']))
             
-            if st.button("Create New Agent", width='stretch'):
+            if st.button("Create New Agent", use_container_width=True):
                 st.session_state.agent_config.update({
                     'hidden_size': hidden_size, 'lr': lr, 'gamma': gamma,
                     'epsilon_start': epsilon_start, 'epsilon_end': epsilon_end,
@@ -725,9 +741,18 @@ def main():
         
         # Training Controls
         with st.expander("🏋️ Training", expanded=True):
+            # Training mode selector
+            st.session_state.training_mode = st.radio(
+                "Mode",
+                ["Watch", "Train fast", "Evaluate"],
+                index=["Watch", "Train fast", "Evaluate"].index(st.session_state.get('training_mode', 'Watch')),
+                horizontal=True,
+                help="Watch: slow enough to follow | Train fast: batches between refreshes | Evaluate: greedy policy, no learning"
+            )
+            
             c1, c2 = st.columns(2)
             with c1:
-                if st.button("▶️ Start Training", width='stretch', disabled=st.session_state.training):
+                if st.button("▶️ Start Training", use_container_width=True, disabled=st.session_state.training):
                     if st.session_state.agent is None: st.session_state.agent = create_agent()
                     if st.session_state.env is None: st.session_state.env = create_env()
                     st.session_state.training = True
@@ -735,12 +760,12 @@ def main():
                     reset_game()
                     st.rerun()
             with c2:
-                if st.button("⏹️ Stop Training", width='stretch', disabled=not st.session_state.training):
+                if st.button("⏹️ Stop Training", use_container_width=True, disabled=not st.session_state.training):
                     st.session_state.training = False
                     st.session_state.paused = True
                     st.rerun()
             
-            if st.button("🔄 Reset Stats", width='stretch'):
+            if st.button("🔄 Reset Stats", use_container_width=True):
                 if st.session_state.agent: st.session_state.agent.reset_stats()
                 st.session_state.training_stats = {'scores': [], 'mean_scores': [], 'epsilon': [], 'loss': [], 'high_score': 0}
                 st.session_state.training_episode = 0
@@ -757,12 +782,12 @@ def main():
             save_path = st.text_input("Checkpoint Path", "checkpoints/snake_dqn.pth")
             c1, c2 = st.columns(2)
             with c1:
-                if st.button("💾 Save", width='stretch'):
+                if st.button("💾 Save", use_container_width=True):
                     if st.session_state.agent:
                         st.session_state.agent.save_checkpoint(save_path)
                         st.success("Saved!")
             with c2:
-                if st.button("📂 Load", width='stretch'):
+                if st.button("📂 Load", use_container_width=True):
                     if st.session_state.agent is None: st.session_state.agent = create_agent()
                     try:
                         info = st.session_state.agent.load_checkpoint(save_path)
@@ -777,7 +802,8 @@ def main():
         # Display Settings
         with st.expander("🎨 Display", expanded=False):
             st.session_state.show_grid = st.checkbox("Show Grid", st.session_state.show_grid)
-            if st.button("🎮 New Game", width='stretch'):
+            st.session_state.show_network = st.checkbox("Show network internals", st.session_state.get('show_network', False))
+            if st.button("🎮 New Game", use_container_width=True):
                 reset_game()
                 st.rerun()
     
@@ -836,15 +862,15 @@ def main():
         # Controls row
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            if st.button("▶️ Play" if st.session_state.paused else "⏸️ Pause", width='stretch', key="play_pause"):
+            if st.button("▶️ Play" if st.session_state.paused else "⏸️ Pause", use_container_width=True, key="play_pause"):
                 st.session_state.paused = not st.session_state.paused
                 st.rerun()
         with c2:
-            if st.button("⏭️ Step", width='stretch', disabled=not st.session_state.step_mode, key="step_btn"):
+            if st.button("⏭️ Step", use_container_width=True, disabled=not st.session_state.step_mode, key="step_btn"):
                 step_game()
                 st.rerun()
         with c3:
-            if st.button("🔄 Reset", width='stretch', key="reset_btn"):
+            if st.button("🔄 Reset", use_container_width=True, key="reset_btn"):
                 reset_game()
                 st.rerun()
         with c4:
@@ -854,27 +880,14 @@ def main():
         if st.session_state.paused and not st.session_state.game_over:
             mc1, mc2, mc3 = st.columns(3)
             with mc1:
-                if st.button("⬆️ Straight", width='stretch', key="manual_straight"):
+                if st.button("⬆️ Straight", use_container_width=True, key="manual_straight"):
                     step_game(0); st.rerun()
             with mc2:
-                if st.button("➡️ Right", width='stretch', key="manual_right"):
+                if st.button("➡️ Right", use_container_width=True, key="manual_right"):
                     step_game(1); st.rerun()
             with mc3:
-                if st.button("⬅️ Left", width='stretch', key="manual_left"):
+                if st.button("⬅️ Left", use_container_width=True, key="manual_left"):
                     step_game(2); st.rerun()
-        
-        # Auto-step logic
-        if not st.session_state.paused and not st.session_state.game_over:
-            step_game()
-            time.sleep(st.session_state.speed / 1000.0)
-            st.rerun()
-        elif not st.session_state.paused and st.session_state.game_over:
-            if st.session_state.training:
-                reset_game()
-                time.sleep(0.1)
-                st.rerun()
-            else:
-                st.session_state.paused = True
     
     # ----- RIGHT COLUMN: LEARNING CHARTS -----
     with charts_col:
@@ -911,98 +924,114 @@ def main():
             )
     
     # ============================================================================
-    # Network Details Tab (separate from main view)
+    # Network Details (conditional on toggle)
     # ============================================================================
-    with st.expander("▸ Neural-network details", expanded=False):
-        # State Vector
-        st.write("**State Vector (11D)**")
-        fig_state = render_state_vector()
-        if fig_state:
-            st.plotly_chart(fig_state, use_container_width=True, key="state_chart", config={'displayModeBar': False})
-        
-        st.divider()
-        
-        # Two columns for network + decision
-        nc1, nc2 = st.columns([1, 1])
-        
-        with nc1:
-            st.write("**Network Activations**")
-            fig_net = render_network_architecture()
-            if fig_net:
-                st.plotly_chart(fig_net, use_container_width=True, key="net_chart", config={'displayModeBar': False})
-        
-        with nc2:
-            st.write("**Decision Making**")
+    if st.session_state.get('show_network', False):
+        with st.expander("▸ Neural-network details", expanded=True):
+            # State Vector
+            st.write("**State Vector (11D)**")
+            fig_state = render_state_vector()
+            if fig_state:
+                st.plotly_chart(fig_state, use_container_width=True, key="state_chart", config={'displayModeBar': False})
             
-            snap = st.session_state.decision_snapshot
-            is_training = st.session_state.training
-            if snap is not None:
-                q_vals = snap['q_values']
-                action_idx = snap['action']
-                action_names = ['Straight', 'Right', 'Left']
-                epsilon = snap['epsilon'] if is_training else 0.0
-                reason = snap['reason']
+            st.divider()
+            
+            # Two columns for network + decision
+            nc1, nc2 = st.columns([1, 1])
+            
+            with nc1:
+                st.write("**Network Activations**")
+                fig_net = render_network_architecture()
+                if fig_net:
+                    st.plotly_chart(fig_net, use_container_width=True, key="net_chart", config={'displayModeBar': False})
+            
+            with nc2:
+                st.write("**Decision Making**")
                 
-                greedy_action = int(np.argmax(q_vals))
-                actual_probs = np.full(3, epsilon / 3.0)
-                actual_probs[greedy_action] += 1.0 - epsilon
-            else:
-                q_vals = st.session_state.current_q_values
-                action_idx = st.session_state.current_action
-                action_names = ['Straight', 'Right', 'Left']
-                epsilon = st.session_state.agent.epsilon if (st.session_state.agent and is_training) else 0.0
-                reason = "unknown"
-                
-                if q_vals is not None:
+                snap = st.session_state.decision_snapshot
+                is_training = st.session_state.training
+                if snap is not None:
+                    q_vals = snap['q_values']
+                    action_idx = snap['action']
+                    action_names = ['Straight', 'Right', 'Left']
+                    epsilon = snap['epsilon'] if is_training else 0.0
+                    reason = snap['reason']
+                    
                     greedy_action = int(np.argmax(q_vals))
                     actual_probs = np.full(3, epsilon / 3.0)
                     actual_probs[greedy_action] += 1.0 - epsilon
                 else:
-                    actual_probs = np.full(3, 1.0 / 3.0)
-                    greedy_action = 0
-            
-            if q_vals is not None:
-                q_colors = ['#44FF44' if i == action_idx else '#666666' for i in range(3)]
-                fig_q = go.Figure()
-                fig_q.add_trace(go.Bar(
-                    x=action_names, y=q_vals, marker_color=q_colors,
-                    text=[f'{v:.2f}' for v in q_vals], textposition='outside',
-                    textfont=dict(color='white', size=11), showlegend=False
-                ))
-                fig_q.update_layout(
-                    title=dict(text="Q-Values (at decision time)", font=dict(size=12)),
-                    height=180, margin=dict(l=20, r=10, t=30, b=10),
-                    yaxis=dict(showgrid=True, gridcolor='rgba(100,100,100,0.2)'),
-                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='white', size=9)
-                )
-                st.plotly_chart(fig_q, use_container_width=True, key="q_chart", config={'displayModeBar': False})
+                    q_vals = st.session_state.current_q_values
+                    action_idx = st.session_state.current_action
+                    action_names = ['Straight', 'Right', 'Left']
+                    epsilon = st.session_state.agent.epsilon if (st.session_state.agent and is_training) else 0.0
+                    reason = "unknown"
+                    
+                    if q_vals is not None:
+                        greedy_action = int(np.argmax(q_vals))
+                        actual_probs = np.full(3, epsilon / 3.0)
+                        actual_probs[greedy_action] += 1.0 - epsilon
+                    else:
+                        actual_probs = np.full(3, 1.0 / 3.0)
+                        greedy_action = 0
                 
-                p_colors = ['#FFD700' if i == action_idx else '#555555' for i in range(3)]
-                fig_p = go.Figure()
-                fig_p.add_trace(go.Bar(
-                    x=action_names, y=actual_probs, marker_color=p_colors,
-                    text=[f'{p:.0%}' for p in actual_probs], textposition='outside',
-                    textfont=dict(color='white', size=11), showlegend=False
-                ))
-                fig_p.update_layout(
-                    title=dict(text=f"Policy (ε-greedy, ε={epsilon:.3f})", font=dict(size=12)),
-                    height=180, margin=dict(l=20, r=10, t=30, b=10),
-                    yaxis=dict(range=[0, 1.1], showgrid=True, gridcolor='rgba(100,100,100,0.2)'),
-                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='white', size=9)
-                )
-                st.plotly_chart(fig_p, use_container_width=True, key="prob_chart", config={'displayModeBar': False})
-                
-                action_label = action_names[action_idx] if action_idx is not None else "N/A"
-                if reason == "exploring":
-                    st.info(f"🎲 **Exploring** (ε={epsilon:.3f}): {action_label} chosen randomly")
-                elif reason == "manual":
-                    st.info(f"👤 **Manual**: {action_label} chosen by user")
+                if q_vals is not None:
+                    q_colors = ['#44FF44' if i == action_idx else '#666666' for i in range(3)]
+                    fig_q = go.Figure()
+                    fig_q.add_trace(go.Bar(
+                        x=action_names, y=q_vals, marker_color=q_colors,
+                        text=[f'{v:.2f}' for v in q_vals], textposition='outside',
+                        textfont=dict(color='white', size=11), showlegend=False
+                    ))
+                    fig_q.update_layout(
+                        title=dict(text="Q-Values (at decision time)", font=dict(size=12)),
+                        height=180, margin=dict(l=20, r=10, t=30, b=10),
+                        yaxis=dict(showgrid=True, gridcolor='rgba(100,100,100,0.2)'),
+                        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                        font=dict(color='white', size=9)
+                    )
+                    st.plotly_chart(fig_q, use_container_width=True, key="q_chart", config={'displayModeBar': False})
+                    
+                    p_colors = ['#FFD700' if i == action_idx else '#555555' for i in range(3)]
+                    fig_p = go.Figure()
+                    fig_p.add_trace(go.Bar(
+                        x=action_names, y=actual_probs, marker_color=p_colors,
+                        text=[f'{p:.0%}' for p in actual_probs], textposition='outside',
+                        textfont=dict(color='white', size=11), showlegend=False
+                    ))
+                    fig_p.update_layout(
+                        title=dict(text=f"Policy (ε-greedy, ε={epsilon:.3f})", font=dict(size=12)),
+                        height=180, margin=dict(l=20, r=10, t=30, b=10),
+                        yaxis=dict(range=[0, 1.1], showgrid=True, gridcolor='rgba(100,100,100,0.2)'),
+                        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                        font=dict(color='white', size=9)
+                    )
+                    st.plotly_chart(fig_p, use_container_width=True, key="prob_chart", config={'displayModeBar': False})
+                    
+                    action_label = action_names[action_idx] if action_idx is not None else "N/A"
+                    if reason == "exploring":
+                        st.info(f"🎲 **Exploring** (ε={epsilon:.3f}): {action_label} chosen randomly")
+                    elif reason == "manual":
+                        st.info(f"👤 **Manual**: {action_label} chosen by user")
+                    else:
+                        st.success(f"🎯 **Exploiting** (ε={epsilon:.3f}): {action_label} = argmax Q")
                 else:
-                    st.success(f"🎯 **Exploiting** (ε={epsilon:.3f}): {action_label} = argmax Q")
-            else:
-                st.info("No decision data yet")
+                    st.info("No decision data yet")
+    
+    # ============================================================================
+    # Auto-step logic (AFTER all rendering)
+    # ============================================================================
+    if not st.session_state.paused and not st.session_state.game_over:
+        step_game()
+        time.sleep(st.session_state.speed / 1000.0)
+        st.rerun()
+    elif not st.session_state.paused and st.session_state.game_over:
+        if st.session_state.training:
+            reset_game()
+            time.sleep(0.1)
+            st.rerun()
+        else:
+            st.session_state.paused = True
 
 if __name__ == "__main__":
     main()
