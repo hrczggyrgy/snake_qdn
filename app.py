@@ -106,7 +106,14 @@ st.markdown("""
 # Game Frame Display (inline PNG for reliable rendering)
 # ============================================================================
 def display_game_frame(frame):
-    """Display game frame using inline PNG to avoid Streamlit media delivery issues."""
+    """Use a persistent canvas for board state; keep PNG as an initial fallback."""
+    state = st.session_state.get("game_state")
+    if state is not None:
+        from game_canvas import render_game_canvas
+        render_game_canvas(
+            state, show_grid=st.session_state.get("show_grid", False)
+        )
+        return
     if frame is None:
         st.error("The environment returned no game frame.")
         return
@@ -1032,88 +1039,33 @@ def main():
                 f"ε {state.agent.epsilon:.3f}"
             )
 
-    # Chart fragment - refreshes every 1 second when running (reduced from 0.5s)
-    _chart_refresh = 1.0 if _running else None
-
-    # Persistent chart placeholders (created once, updated by fragment)
-    score_slot = st.empty()
-    loss_col, epsilon_col = st.columns(2, gap="small")
-    loss_slot = loss_col.empty()
-    epsilon_slot = epsilon_col.empty()
-
-    # Track chart data versions for change detection
-    if "chart_versions" not in st.session_state:
-        st.session_state.chart_versions = {"scores": 0, "loss": 0, "epsilon": 0}
-
+    # The fragment owns its layout; never retain DeltaGenerators in Session State.
     @st.fragment(run_every=1.0 if _running else None)
     def live_charts_area():
-        """Render learning charts. Updates independently of game fragment."""
-        stats = st.session_state.training_stats
-        agent = st.session_state.agent
-
-        # Compute version tuples for change detection
-        versions = {
-            "scores": (len(stats["scores"]), len(stats["mean_scores"])),
-            "loss": agent.trainer.training_step if agent else 0,
-            "epsilon": (len(stats["epsilon"]), agent.epsilon if agent else None),
-        }
-
-        # Check which charts need updating
-        changed = {
-            name for name, version in versions.items()
-            if st.session_state.chart_versions.get(name) != version
-        }
-
-        if not changed:
-            return
-
-        # Build only the changed charts
-        figures = dict(zip(
-            ("scores", "loss", "epsilon"),
-            render_training_charts(),
-        ))
-
-        slots = {
-            "scores": score_slot,
-            "loss": st.session_state.get("_loss_slot", loss_col.empty()),
-            "epsilon": st.session_state.get("_epsilon_slot", epsilon_col.empty()),
-        }
-
-        # Store slots in session state for persistence
-        st.session_state._loss_slot = loss_col.empty()
-        st.session_state._epsilon_slot = epsilon_col.empty()
-
-        for name in ("scores", "loss", "epsilon"):
-            if name not in changed:
-                continue
-
-            fig = figures[name]
+        """Render every chart on every rerun, including when data is unchanged."""
+        score_fig, loss_fig, epsilon_fig = render_training_charts()
+        score_fig.update_layout(
+            height=220, autosize=True, width=None,
+            uirevision="snake-scores", transition_duration=0,
+        )
+        st.plotly_chart(
+            score_fig, width="stretch", key="live_scores",
+            config={"displayModeBar": False},
+        )
+        loss_col, epsilon_col = st.columns(2, gap="small")
+        for name, fig, column in (
+            ("loss", loss_fig, loss_col),
+            ("epsilon", epsilon_fig, epsilon_col),
+        ):
             fig.update_layout(
-                height=220 if name == "scores" else 180,
-                autosize=True,
-                width=None,
-                uirevision=f"snake-{name}",  # Preserve Plotly state (zoom/pan)
-                transition_duration=0,
+                height=180, autosize=True, width=None,
+                uirevision=f"snake-{name}", transition_duration=0,
             )
-
-            if name == "scores":
-                slots[name].plotly_chart(
-                    fig, width='stretch', key=f"live_{name}",
-                    config={"displayModeBar": False}
+            with column:
+                st.plotly_chart(
+                    fig, width="stretch", key=f"live_{name}",
+                    config={"displayModeBar": False},
                 )
-            elif name == "loss":
-                st.session_state._loss_slot.plotly_chart(
-                    fig, width='stretch', key=f"live_{name}",
-                    config={"displayModeBar": False}
-                )
-            else:  # epsilon
-                st.session_state._epsilon_slot.plotly_chart(
-                    fig, width='stretch', key=f"live_{name}",
-                    config={"displayModeBar": False}
-                )
-
-        # Update tracked versions
-        st.session_state.chart_versions.update(versions)
 
     # ============================================================================
     # Main Layout: Game (40%) + Charts (60%)
