@@ -949,12 +949,13 @@ def main():
                 st.plotly_chart(fig_p, width=380, key="prob_chart", config={'displayModeBar': False})
                 
                 # Selection reason display
+                action_label = action_names[action_idx] if action_idx is not None else "N/A"
                 if reason == "exploring":
-                    st.info(f"🎲 **Exploring** (ε={epsilon:.3f}): {action_names[action_idx]} chosen randomly")
+                    st.info(f"🎲 **Exploring** (ε={epsilon:.3f}): {action_label} chosen randomly")
                 elif reason == "manual":
-                    st.info(f"👤 **Manual**: {action_names[action_idx]} chosen by user")
+                    st.info(f"👤 **Manual**: {action_label} chosen by user")
                 else:
-                    st.success(f"🎯 **Exploiting** (ε={epsilon:.3f}): {action_names[action_idx]} = argmax Q")
+                    st.success(f"🎯 **Exploiting** (ε={epsilon:.3f}): {action_label} = argmax Q")
             else:
                 st.info("No decision data yet")
     
