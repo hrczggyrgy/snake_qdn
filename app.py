@@ -677,12 +677,11 @@ def render_training_charts():
 # Main Application
 # ============================================================================
 def main():
-    # Header
-    st.markdown('<h1 class="main-header">🐍 Snake DQN - Live Training Dashboard</h1>', unsafe_allow_html=True)
-    
     # Sidebar Configuration
     with st.sidebar:
-        st.header("⚙️ Configuration")
+        st.markdown("### 🐍 Snake DQN")
+        st.caption("Live Training Dashboard")
+        st.divider()
         
         # Environment Settings
         with st.expander("🌍 Environment", expanded=True):
@@ -696,9 +695,8 @@ def main():
                     'grid_size': grid_size, 'step_penalty': step_penalty,
                     'food_reward': food_reward, 'death_penalty': death_penalty
                 })
-                # Environment config changed - reset everything to avoid mixing tasks
                 st.session_state.env = create_env()
-                st.session_state.agent = create_agent()  # New agent with fresh replay
+                st.session_state.agent = create_agent()
                 reset_game()
                 st.success("Environment updated - agent and replay reset")
                 st.rerun()
@@ -792,30 +790,50 @@ def main():
         reset_game()
     
     # ============================================================================
-    # Top Metrics Row (Compact)
+    # Compact Status Line
     # ============================================================================
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        st.metric("Episode", st.session_state.training_episode, 
-                 delta=f"Step: {st.session_state.training_step}" if st.session_state.training else None)
-    with m2:
-        current_score = st.session_state.game_state['score'] if st.session_state.game_state else 0
-        st.metric("Score", current_score, delta=f"High: {st.session_state.training_stats['high_score']}")
-    with m3:
-        eps = st.session_state.agent.epsilon if st.session_state.agent else 0
-        st.metric("Epsilon", f"{eps:.3f}")
-    with m4:
-        avg50 = st.session_state.training_stats['mean_scores'][-1] if st.session_state.training_stats['mean_scores'] else 0
-        st.metric("Avg (50)", f"{avg50:.1f}")
+    agent = st.session_state.agent
+    stats = st.session_state.training_stats
+    gs = st.session_state.game_state
+    
+    score = gs['score'] if gs else 0
+    best = agent.high_score if agent else stats['high_score']
+    epsilon = agent.epsilon if agent else 1.0
+    episode = agent.n_games if agent else st.session_state.training_episode
+    steps = agent.total_steps if agent else 0
+    avg50 = stats['mean_scores'][-1] if stats['mean_scores'] else 0.0
+    
+    st.caption(
+        f"Ep {episode} · Total steps {steps:,} · "
+        f"Score {score} · Best {best} · "
+        f"ε {epsilon:.3f} · Avg₅₀ {avg50:.1f}"
+    )
     
     # ============================================================================
-    # TABBED LAYOUT - Better organization
+    # Main Layout: Game (40%) + Charts (60%)
     # ============================================================================
-    tab1, tab2, tab3 = st.tabs(["🎮 Game Arena", "🧠 Network Internals", "📈 Analytics"])
+    game_col, charts_col = st.columns([2, 3], gap="small")
     
-    # ----- TAB 1: GAME ARENA -----
-    with tab1:
-        # Game controls row
+    # ----- LEFT COLUMN: LIVE GAME ARENA -----
+    with game_col:
+        # Game render - autosize to container
+        fig_game = render_game_grid()
+        fig_game.update_layout(autosize=True, width=None, height=400)
+        st.plotly_chart(
+            fig_game,
+            use_container_width=True,
+            key="live_game",
+            config={"displayModeBar": False},
+        )
+        
+        # Game info
+        if st.session_state.game_state:
+            info = st.session_state.game_state
+            head = info['snake'][0] if info['snake'] else (0, 0)
+            dirs = ['→', '↓', '←', '↑']
+            st.caption(f"Length: {len(info['snake'])} | Head: {head} | Food: {info['food']} | Dir: {dirs[info['direction']]}")
+        
+        # Controls row
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             if st.button("▶️ Play" if st.session_state.paused else "⏸️ Pause", width='stretch', key="play_pause"):
@@ -830,7 +848,7 @@ def main():
                 reset_game()
                 st.rerun()
         with c4:
-            st.write("")  # Spacer
+            st.write("")
         
         # Manual controls when paused
         if st.session_state.paused and not st.session_state.game_over:
@@ -845,17 +863,6 @@ def main():
                 if st.button("⬅️ Left", width='stretch', key="manual_left"):
                     step_game(2); st.rerun()
         
-        # Game render - fixed width for stability
-        fig_game = render_game_grid()
-        st.plotly_chart(fig_game, width=380, key="game_chart", config={'displayModeBar': False})
-        
-        # Game info
-        if st.session_state.game_state:
-            info = st.session_state.game_state
-            head = info['snake'][0] if info['snake'] else (0, 0)
-            dirs = ['→', '↓', '←', '↑']
-            st.caption(f"Length: {len(info['snake'])} | Head: {head} | Food: {info['food']} | Dir: {dirs[info['direction']]}")
-        
         # Auto-step logic
         if not st.session_state.paused and not st.session_state.game_over:
             step_game()
@@ -869,13 +876,49 @@ def main():
             else:
                 st.session_state.paused = True
     
-    # ----- TAB 2: NETWORK INTERNALS -----
-    with tab2:
+    # ----- RIGHT COLUMN: LEARNING CHARTS -----
+    with charts_col:
+        score_fig, loss_fig, epsilon_fig = render_training_charts()
+        
+        # Score chart (full width)
+        score_fig.update_layout(height=220, autosize=True, width=None)
+        st.plotly_chart(
+            score_fig,
+            use_container_width=True,
+            key="live_scores",
+            config={"displayModeBar": False},
+        )
+        
+        # Loss + Epsilon side by side
+        loss_col, epsilon_col = st.columns(2, gap="small")
+        
+        loss_fig.update_layout(height=160, autosize=True, width=None)
+        with loss_col:
+            st.plotly_chart(
+                loss_fig,
+                use_container_width=True,
+                key="live_loss",
+                config={"displayModeBar": False},
+            )
+        
+        epsilon_fig.update_layout(height=160, autosize=True, width=None)
+        with epsilon_col:
+            st.plotly_chart(
+                epsilon_fig,
+                use_container_width=True,
+                key="live_epsilon",
+                config={"displayModeBar": False},
+            )
+    
+    # ============================================================================
+    # Network Details Tab (separate from main view)
+    # ============================================================================
+    with st.expander("▸ Neural-network details", expanded=False):
         # State Vector
         st.write("**State Vector (11D)**")
         fig_state = render_state_vector()
         if fig_state:
-            st.plotly_chart(fig_state, width=380, key="state_chart", config={'displayModeBar': False})
+            st.plotly_chart(fig_state, use_container_width=True, key="state_chart", config={'displayModeBar': False})
         
         st.divider()
         
@@ -886,23 +929,20 @@ def main():
             st.write("**Network Activations**")
             fig_net = render_network_architecture()
             if fig_net:
-                st.plotly_chart(fig_net, width=380, key="net_chart", config={'displayModeBar': False})
+                st.plotly_chart(fig_net, use_container_width=True, key="net_chart", config={'displayModeBar': False})
         
         with nc2:
             st.write("**Decision Making**")
             
-            # Use decision snapshot (pre-action) if available, else fall back to current
             snap = st.session_state.decision_snapshot
             is_training = st.session_state.training
             if snap is not None:
                 q_vals = snap['q_values']
                 action_idx = snap['action']
                 action_names = ['Straight', 'Right', 'Left']
-                epsilon = snap['epsilon'] if is_training else 0.0  # Evaluation uses epsilon=0
+                epsilon = snap['epsilon'] if is_training else 0.0
                 reason = snap['reason']
                 
-                # Actual epsilon-greedy policy probabilities
-                # P(a) = epsilon/3 + (1-epsilon) * 1[a == argmax]
                 greedy_action = int(np.argmax(q_vals))
                 actual_probs = np.full(3, epsilon / 3.0)
                 actual_probs[greedy_action] += 1.0 - epsilon
@@ -913,7 +953,6 @@ def main():
                 epsilon = st.session_state.agent.epsilon if (st.session_state.agent and is_training) else 0.0
                 reason = "unknown"
                 
-                # Compute actual epsilon-greedy policy, not softmax
                 if q_vals is not None:
                     greedy_action = int(np.argmax(q_vals))
                     actual_probs = np.full(3, epsilon / 3.0)
@@ -923,7 +962,6 @@ def main():
                     greedy_action = 0
             
             if q_vals is not None:
-                # Q-Values chart (from decision snapshot)
                 q_colors = ['#44FF44' if i == action_idx else '#666666' for i in range(3)]
                 fig_q = go.Figure()
                 fig_q.add_trace(go.Bar(
@@ -938,9 +976,8 @@ def main():
                     plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
                     font=dict(color='white', size=9)
                 )
-                st.plotly_chart(fig_q, width=380, key="q_chart", config={'displayModeBar': False})
+                st.plotly_chart(fig_q, use_container_width=True, key="q_chart", config={'displayModeBar': False})
                 
-                # Actual epsilon-greedy policy probabilities
                 p_colors = ['#FFD700' if i == action_idx else '#555555' for i in range(3)]
                 fig_p = go.Figure()
                 fig_p.add_trace(go.Bar(
@@ -955,9 +992,8 @@ def main():
                     plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
                     font=dict(color='white', size=9)
                 )
-                st.plotly_chart(fig_p, width=380, key="prob_chart", config={'displayModeBar': False})
+                st.plotly_chart(fig_p, use_container_width=True, key="prob_chart", config={'displayModeBar': False})
                 
-                # Selection reason display
                 action_label = action_names[action_idx] if action_idx is not None else "N/A"
                 if reason == "exploring":
                     st.info(f"🎲 **Exploring** (ε={epsilon:.3f}): {action_label} chosen randomly")
@@ -967,47 +1003,6 @@ def main():
                     st.success(f"🎯 **Exploiting** (ε={epsilon:.3f}): {action_label} = argmax Q")
             else:
                 st.info("No decision data yet")
-    
-    # ----- TAB 3: ANALYTICS -----
-    with tab3:
-        fig_score, fig_loss, fig_eps = render_training_charts()
-        
-        st.plotly_chart(fig_score, width=380, key="score_chart", config={'displayModeBar': False})
-        st.plotly_chart(fig_loss, width=380, key="loss_chart", config={'displayModeBar': False})
-        st.plotly_chart(fig_eps, width=380, key="eps_chart", config={'displayModeBar': False})
-        
-        # Statistics
-        st.divider()
-        st.write("**Training Statistics**")
-        stats = st.session_state.training_stats
-        
-        if stats['scores']:
-            recent = stats['scores'][-10:] if len(stats['scores']) >= 10 else stats['scores']
-            s1, s2 = st.columns(2)
-            with s1:
-                st.metric("Recent Avg (10)", f"{np.mean(recent):.1f}")
-                st.metric("Best Score", stats['high_score'])
-            with s2:
-                st.metric("Episodes", len(stats['scores']))
-                if stats['loss']:
-                    st.metric("Loss", f"{stats['loss'][-1]:.4f}")
-            
-            # Compact score distribution
-            fig_dist = go.Figure()
-            fig_dist.add_trace(go.Histogram(
-                x=stats['scores'], nbinsx=min(15, max(stats['scores'])+1),
-                marker_color='#4488FF', opacity=0.7
-            ))
-            fig_dist.update_layout(
-                title=dict(text="Score Distribution", font=dict(size=11)),
-                height=160, margin=dict(l=20, r=10, t=25, b=20),
-                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                font=dict(color='white', size=9), showlegend=False,
-                xaxis=dict(title=""), yaxis=dict(title="")
-            )
-            st.plotly_chart(fig_dist, width=380, key="dist_chart", config={'displayModeBar': False})
-        else:
-            st.info("Start training to see statistics")
 
 if __name__ == "__main__":
     main()
