@@ -80,10 +80,20 @@ class SnakeGameAI:
         
         # Initialize snake in center, moving right
         center = self.grid_size // 2
+        
+        # Ensure initial snake fits within grid (minimum grid_size=3)
+        # Snake length is 3, so we need at least 3 cells horizontally
+        if self.grid_size < 3:
+            raise ValueError(f"grid_size must be >= 3, got {self.grid_size}")
+        
+        # Place snake horizontally in center row, ensuring all segments are in bounds
+        # For grid_size=3: center=1, snake at (1,1), (0,1) - but we need 3 segments
+        # So we place at (1, center), (0, center), and wrap or adjust
+        start_x = max(2, center)  # Ensure we have room for 3 segments going left
         self.snake = deque([
-            (center, center),
-            (center - 1, center),
-            (center - 2, center)
+            (start_x, center),
+            (start_x - 1, center),
+            (start_x - 2, center)
         ])
         self.direction = 0  # 0=right, 1=down, 2=left, 3=up
         self.score = 0

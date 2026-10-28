@@ -18,6 +18,7 @@ def test_snake_env():
     print("Testing Snake Environment...")
     from snake_env import SnakeGameAI
     
+    # Test standard grid
     env = SnakeGameAI(grid_size=10, render_mode='rgb_array')
     obs, info = env.reset(seed=42)
     
@@ -41,6 +42,32 @@ def test_snake_env():
     print(f"  ✓ Render works, shape: {img.shape}")
     
     env.close()
+    
+    # Test minimum grid size (3x3)
+    env = SnakeGameAI(grid_size=3, render_mode='rgb_array')
+    obs, info = env.reset(seed=42)
+    assert obs.shape == (11,)
+    # Verify snake is within bounds
+    for seg in env.snake:
+        assert 0 <= seg[0] < 3 and 0 <= seg[1] < 3, f"Snake segment {seg} out of bounds for 3x3 grid"
+    print(f"  ✓ Minimum grid size (3x3) works, snake: {list(env.snake)}")
+    env.close()
+    
+    # Test grid_size=4
+    env = SnakeGameAI(grid_size=4, render_mode='rgb_array')
+    obs, info = env.reset(seed=42)
+    for seg in env.snake:
+        assert 0 <= seg[0] < 4 and 0 <= seg[1] < 4, f"Snake segment {seg} out of bounds for 4x4 grid"
+    print(f"  ✓ Grid size 4x4 works, snake: {list(env.snake)}")
+    env.close()
+    
+    # Test that grid_size < 3 raises error
+    try:
+        SnakeGameAI(grid_size=2)
+        assert False, "Should have raised ValueError for grid_size < 3"
+    except ValueError as e:
+        print(f"  ✓ Correctly rejects grid_size < 3: {e}")
+    
     print("  ✓ Snake Environment tests passed!\n")
 
 
