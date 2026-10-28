@@ -696,8 +696,11 @@ def main():
                     'grid_size': grid_size, 'step_penalty': step_penalty,
                     'food_reward': food_reward, 'death_penalty': death_penalty
                 })
+                # Environment config changed - reset everything to avoid mixing tasks
                 st.session_state.env = create_env()
+                st.session_state.agent = create_agent()  # New agent with fresh replay
                 reset_game()
+                st.success("Environment updated - agent and replay reset")
                 st.rerun()
         
         # Agent Settings
@@ -890,11 +893,12 @@ def main():
             
             # Use decision snapshot (pre-action) if available, else fall back to current
             snap = st.session_state.decision_snapshot
+            is_training = st.session_state.training
             if snap is not None:
                 q_vals = snap['q_values']
                 action_idx = snap['action']
                 action_names = ['Straight', 'Right', 'Left']
-                epsilon = snap['epsilon']
+                epsilon = snap['epsilon'] if is_training else 0.0  # Evaluation uses epsilon=0
                 reason = snap['reason']
                 
                 # Actual epsilon-greedy policy probabilities
@@ -906,10 +910,17 @@ def main():
                 q_vals = st.session_state.current_q_values
                 action_idx = st.session_state.current_action
                 action_names = ['Straight', 'Right', 'Left']
-                epsilon = st.session_state.agent.epsilon if st.session_state.agent else 0
+                epsilon = st.session_state.agent.epsilon if (st.session_state.agent and is_training) else 0.0
                 reason = "unknown"
-                actual_probs = st.session_state.current_action_probs
-                greedy_action = int(np.argmax(q_vals)) if q_vals is not None else 0
+                
+                # Compute actual epsilon-greedy policy, not softmax
+                if q_vals is not None:
+                    greedy_action = int(np.argmax(q_vals))
+                    actual_probs = np.full(3, epsilon / 3.0)
+                    actual_probs[greedy_action] += 1.0 - epsilon
+                else:
+                    actual_probs = np.full(3, 1.0 / 3.0)
+                    greedy_action = 0
             
             if q_vals is not None:
                 # Q-Values chart (from decision snapshot)
