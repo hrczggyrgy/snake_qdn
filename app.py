@@ -45,8 +45,8 @@ except:
 
 def btn_full(label, **kwargs):
     """Button with full-width compatibility across Streamlit versions."""
-    # Streamlit 1.33+ supports use_container_width, older versions use_container_width also works
-    return st.button(label, use_container_width=True, **kwargs)
+    # Streamlit 1.37+ supports width='stretch', older versions use_container_width also works
+    return st.button(label, width='stretch', **kwargs)
 
 
 # ============================================================================
@@ -811,7 +811,7 @@ def main():
             food_reward = st.number_input("Food Reward", 0.0, 100.0, st.session_state.env_config['food_reward'], 1.0)
             death_penalty = st.number_input("Death Penalty", -100.0, 0.0, st.session_state.env_config['death_penalty'], 1.0)
             
-            if st.button("Apply Environment Settings", use_container_width=True):
+            if st.button("Apply Environment Settings", width='stretch'):
                 st.session_state.env_config.update({
                     'grid_size': grid_size, 'step_penalty': step_penalty,
                     'food_reward': food_reward, 'death_penalty': death_penalty
@@ -833,7 +833,7 @@ def main():
             memory_size = st.selectbox("Memory Size", [10000, 50000, 100000, 200000], index=[10000, 50000, 100000, 200000].index(st.session_state.agent_config['memory_size']))
             batch_size = st.selectbox("Batch Size", [256, 512, 1000, 2048], index=[256, 512, 1000, 2048].index(st.session_state.agent_config['batch_size']))
             
-            if st.button("Create New Agent", use_container_width=True):
+            if st.button("Create New Agent", width='stretch'):
                 st.session_state.agent_config.update({
                     'hidden_size': hidden_size, 'lr': lr, 'gamma': gamma,
                     'epsilon_start': epsilon_start, 'epsilon_end': epsilon_end,
@@ -883,7 +883,7 @@ def main():
             
             if st.session_state.activity == "Train":
                 if not st.session_state.training:
-                    if st.button("▶️ Start training", use_container_width=True, type="primary"):
+                    if st.button("▶️ Start training", width='stretch', type="primary"):
                         if st.session_state.agent is None: st.session_state.agent = create_agent()
                         if st.session_state.env is None: st.session_state.env = create_env()
                         st.session_state.training = True
@@ -891,17 +891,17 @@ def main():
                         reset_game()
                         st.rerun()
                 elif is_paused:
-                    if st.button("▶️ Resume training", use_container_width=True, type="primary"):
+                    if st.button("▶️ Resume training", width='stretch', type="primary"):
                         st.session_state.paused = False
                         st.rerun()
                 else:
-                    if st.button("⏸️ Pause training", use_container_width=True):
+                    if st.button("⏸️ Pause training", width='stretch'):
                         st.session_state.paused = True
                         st.rerun()
             
             elif st.session_state.activity == "Evaluate":
                 if not st.session_state.training:
-                    if st.button("▶️ Start evaluation", use_container_width=True):
+                    if st.button("▶️ Start evaluation", width='stretch'):
                         if st.session_state.agent is None: st.session_state.agent = create_agent()
                         if st.session_state.env is None: st.session_state.env = create_env()
                         st.session_state.training = False
@@ -909,23 +909,23 @@ def main():
                         reset_game()
                         st.rerun()
                 elif is_paused:
-                    if st.button("▶️ Resume evaluation", use_container_width=True):
+                    if st.button("▶️ Resume evaluation", width='stretch'):
                         st.session_state.paused = False
                         st.rerun()
                 else:
-                    if st.button("⏸️ Pause evaluation", use_container_width=True):
+                    if st.button("⏸️ Pause evaluation", width='stretch'):
                         st.session_state.paused = True
                         st.rerun()
             
             else:  # Manual
                 if not st.session_state.paused:
-                    if st.button("⏸️ Pause", use_container_width=True):
+                    if st.button("⏸️ Pause", width='stretch'):
                         st.session_state.paused = True
                         st.rerun()
             
             # Step once button (only when paused)
             if st.session_state.paused:
-                if st.button("⏭️ Step once", use_container_width=True):
+                if st.button("⏭️ Step once", width='stretch'):
                     step_game()
                     st.rerun()
             
@@ -933,11 +933,11 @@ def main():
             st.divider()
             c1, c2 = st.columns(2)
             with c1:
-                if st.button("🔄 Restart board", use_container_width=True, help="Restart current game, keep learned weights and training history"):
+                if st.button("🔄 Restart board", width='stretch', help="Restart current game, keep learned weights and training history"):
                     reset_game()
                     st.rerun()
             with c2:
-                if st.button("🗑️ Clear training history", use_container_width=True, help="Clear displayed charts and statistics, keep model weights"):
+                if st.button("🗑️ Clear training history", width='stretch', help="Clear displayed charts and statistics, keep model weights"):
                     if st.session_state.agent: st.session_state.agent.reset_stats()
                     st.session_state.training_stats = {'scores': [], 'mean_scores': [], 'epsilon': [], 'loss': [], 'high_score': 0}
                     st.session_state.training_episode = 0
@@ -949,7 +949,7 @@ def main():
             
             # New agent / environment reset
             st.divider()
-            if st.button("🆕 Start new training run", use_container_width=True, help="Create fresh agent and replay buffer, discard current model"):
+            if st.button("🆕 Start new training run", width='stretch', help="Create fresh agent and replay buffer, discard current model"):
                 st.session_state.agent = create_agent()
                 reset_game()
                 st.success("New training run started")
@@ -959,12 +959,12 @@ def main():
             save_path = st.text_input("Checkpoint Path", "checkpoints/snake_dqn.pth")
             c1, c2 = st.columns(2)
             with c1:
-                if st.button("💾 Save checkpoint", use_container_width=True):
+                if st.button("💾 Save checkpoint", width='stretch'):
                     if st.session_state.agent:
                         st.session_state.agent.save_checkpoint(save_path)
                         st.success("Saved!")
             with c2:
-                if st.button("📂 Load checkpoint", use_container_width=True):
+                if st.button("📂 Load checkpoint", width='stretch'):
                     if st.session_state.agent is None: st.session_state.agent = create_agent()
                     try:
                         info = st.session_state.agent.load_checkpoint(save_path)
@@ -979,7 +979,7 @@ def main():
         # Display Settings
         with st.expander("🎨 Display", expanded=False):
             st.session_state.show_network = st.checkbox("Show network internals", st.session_state.get('show_network', False))
-            if st.button("🎮 New Game", use_container_width=True, help="Restart board (same as Restart board above)"):
+            if st.button("🎮 New Game", width='stretch', help="Restart board (same as Restart board above)"):
                 reset_game()
                 st.rerun()
     
@@ -1098,17 +1098,17 @@ def main():
 
             if name == "scores":
                 slots[name].plotly_chart(
-                    fig, use_container_width=True, key=f"live_{name}",
+                    fig, width='stretch', key=f"live_{name}",
                     config={"displayModeBar": False}
                 )
             elif name == "loss":
                 st.session_state._loss_slot.plotly_chart(
-                    fig, use_container_width=True, key=f"live_{name}",
+                    fig, width='stretch', key=f"live_{name}",
                     config={"displayModeBar": False}
                 )
             else:  # epsilon
                 st.session_state._epsilon_slot.plotly_chart(
-                    fig, use_container_width=True, key=f"live_{name}",
+                    fig, width='stretch', key=f"live_{name}",
                     config={"displayModeBar": False}
                 )
 
@@ -1155,7 +1155,7 @@ def main():
         with c1:
             if activity == "Train":
                 if not st.session_state.training:
-                    if st.button("▶️ Start training", use_container_width=True, type="primary", key="play_pause"):
+                    if st.button("▶️ Start training", width='stretch', type="primary", key="play_pause"):
                         if st.session_state.agent is None: st.session_state.agent = create_agent()
                         if st.session_state.env is None: st.session_state.env = create_env()
                         st.session_state.training = True
@@ -1163,16 +1163,16 @@ def main():
                         reset_game()
                         st.rerun()
                 elif is_paused:
-                    if st.button("▶️ Resume", use_container_width=True, type="primary", key="play_pause"):
+                    if st.button("▶️ Resume", width='stretch', type="primary", key="play_pause"):
                         st.session_state.paused = False
                         st.rerun()
                 else:
-                    if st.button("⏸️ Pause", use_container_width=True, key="play_pause"):
+                    if st.button("⏸️ Pause", width='stretch', key="play_pause"):
                         st.session_state.paused = True
                         st.rerun()
             elif activity == "Evaluate":
                 if not st.session_state.training:
-                    if st.button("▶️ Start evaluation", use_container_width=True, type="primary", key="play_pause"):
+                    if st.button("▶️ Start evaluation", width='stretch', type="primary", key="play_pause"):
                         if st.session_state.agent is None: st.session_state.agent = create_agent()
                         if st.session_state.env is None: st.session_state.env = create_env()
                         st.session_state.training = False
@@ -1180,29 +1180,29 @@ def main():
                         reset_game()
                         st.rerun()
                 elif is_paused:
-                    if st.button("▶️ Resume", use_container_width=True, type="primary", key="play_pause"):
+                    if st.button("▶️ Resume", width='stretch', type="primary", key="play_pause"):
                         st.session_state.paused = False
                         st.rerun()
                 else:
-                    if st.button("⏸️ Pause", use_container_width=True, key="play_pause"):
+                    if st.button("⏸️ Pause", width='stretch', key="play_pause"):
                         st.session_state.paused = True
                         st.rerun()
             else:  # Manual
                 if not is_paused:
-                    if st.button("⏸️ Pause", use_container_width=True, key="play_pause"):
+                    if st.button("⏸️ Pause", width='stretch', key="play_pause"):
                         st.session_state.paused = True
                         st.rerun()
         
         with c2:
             if st.session_state.paused:
-                if st.button("⏭️ Step once", use_container_width=True, key="step_btn"):
+                if st.button("⏭️ Step once", width='stretch', key="step_btn"):
                     step_game()
                     st.rerun()
             else:
-                st.button("⏭️ Step once", use_container_width=True, disabled=True, key="step_btn")
+                st.button("⏭️ Step once", width='stretch', disabled=True, key="step_btn")
         
         with c3:
-            if st.button("🔄 Restart board", use_container_width=True, key="reset_btn", help="Restart current game, keep learned weights"):
+            if st.button("🔄 Restart board", width='stretch', key="reset_btn", help="Restart current game, keep learned weights"):
                 reset_game()
                 st.rerun()
         
@@ -1210,13 +1210,13 @@ def main():
         if st.session_state.activity == "Manual" and st.session_state.paused and not st.session_state.game_over:
             mc1, mc2, mc3 = st.columns(3)
             with mc1:
-                if st.button("⬆️ Straight", use_container_width=True, key="manual_straight"):
+                if st.button("⬆️ Straight", width='stretch', key="manual_straight"):
                     step_game(0); st.rerun()
             with mc2:
-                if st.button("➡️ Turn right", use_container_width=True, key="manual_right"):
+                if st.button("➡️ Turn right", width='stretch', key="manual_right"):
                     step_game(1); st.rerun()
             with mc3:
-                if st.button("⬅️ Turn left", use_container_width=True, key="manual_left"):
+                if st.button("⬅️ Turn left", width='stretch', key="manual_left"):
                     step_game(2); st.rerun()
     
     # ----- RIGHT COLUMN: LEARNING CHARTS -----
@@ -1238,7 +1238,7 @@ def main():
             st.write("**State Vector (11D)**")
             fig_state = render_state_vector()
             if fig_state:
-                st.plotly_chart(fig_state, use_container_width=True, key="state_chart", config={'displayModeBar': False})
+                st.plotly_chart(fig_state, width='stretch', key="state_chart", config={'displayModeBar': False})
             
             st.divider()
             
@@ -1249,7 +1249,7 @@ def main():
                 st.write("**Network Activations**")
                 fig_net = render_network_architecture()
                 if fig_net:
-                    st.plotly_chart(fig_net, use_container_width=True, key="net_chart", config={'displayModeBar': False})
+                    st.plotly_chart(fig_net, width='stretch', key="net_chart", config={'displayModeBar': False})
             
             with nc2:
                 st.write("**Decision Making**")
@@ -1296,7 +1296,7 @@ def main():
                         plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
                         font=dict(color='white', size=9)
                     )
-                    st.plotly_chart(fig_q, use_container_width=True, key="q_chart", config={'displayModeBar': False})
+                    st.plotly_chart(fig_q, width='stretch', key="q_chart", config={'displayModeBar': False})
                     
                     p_colors = ['#FFD700' if i == action_idx else '#555555' for i in range(3)]
                     fig_p = go.Figure()
@@ -1312,7 +1312,7 @@ def main():
                         plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
                         font=dict(color='white', size=9)
                     )
-                    st.plotly_chart(fig_p, use_container_width=True, key="prob_chart", config={'displayModeBar': False})
+                    st.plotly_chart(fig_p, width='stretch', key="prob_chart", config={'displayModeBar': False})
                     
                     action_label = action_names[action_idx] if action_idx is not None else "N/A"
                     if reason == "exploring":
