@@ -108,7 +108,13 @@ class SnakeGameAI:
         if empty_cells:
             self.food = random.choice(empty_cells)
         else:
-            self.food = (0, 0)  # Should not happen in normal play
+            # Board is full - snake has won (filled entire grid)
+            # This is a terminal success state
+            self.food = None
+    
+    def is_board_full(self) -> bool:
+        """Check if snake fills the entire board."""
+        return len(self.snake) >= self.grid_size * self.grid_size
     
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """
@@ -136,6 +142,7 @@ class SnakeGameAI:
         # Check collisions
         reward = self.step_penalty
         terminated = False
+        truncated = False
         
         # Wall collision
         if (new_head[0] < 0 or new_head[0] >= self.grid_size or
@@ -161,18 +168,25 @@ class SnakeGameAI:
                 reward = self.food_reward
                 self.steps_since_food = 0
                 self._place_food()
+                
+                # Check for victory (board full)
+                if self.is_board_full():
+                    terminated = True
+                    self.game_over = True
+                    reward += self.food_reward  # Bonus for winning
             else:
                 self.snake.pop()  # Remove tail
             
-            # Truncation: too many steps without food
+            # Truncation: too many steps without food (time limit)
             if self.steps_since_food >= self.max_steps_without_food:
-                terminated = True
+                truncated = True
                 reward = self.death_penalty
+                self.game_over = True
         
         observation = self._get_observation()
         info = self._get_info()
         
-        return observation, reward, terminated, False, info
+        return observation, reward, terminated, truncated, info
     
     def _update_direction(self, action: int) -> None:
         """Update snake direction based on action."""
@@ -224,10 +238,14 @@ class SnakeGameAI:
         dir_down = 1.0 if self.direction == 1 else 0.0
         
         # Food relative position
-        food_left = 1.0 if self.food[0] < head[0] else 0.0
-        food_right = 1.0 if self.food[0] > head[0] else 0.0
-        food_up = 1.0 if self.food[1] < head[1] else 0.0
-        food_down = 1.0 if self.food[1] > head[1] else 0.0
+        if self.food is None:
+            # Board full - all false
+            food_left = food_right = food_up = food_down = 0.0
+        else:
+            food_left = 1.0 if self.food[0] < head[0] else 0.0
+            food_right = 1.0 if self.food[0] > head[0] else 0.0
+            food_up = 1.0 if self.food[1] < head[1] else 0.0
+            food_down = 1.0 if self.food[1] > head[1] else 0.0
         
         obs = np.array([
             float(danger_straight),

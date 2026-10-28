@@ -208,7 +208,14 @@ class Agent:
     
     def load_checkpoint(self, filepath: str) -> Dict[str, Any]:
         """Load agent checkpoint."""
-        return self.trainer.load_checkpoint(filepath)
+        info = self.trainer.load_checkpoint(filepath)
+        
+        # Restore agent state from checkpoint
+        self.n_games = info.get('episode', 0)
+        self.epsilon = info.get('epsilon', 1.0)
+        self.high_score = info.get('high_score', 0)
+        
+        return info
     
     def get_training_stats(self) -> Dict[str, Any]:
         """Get current training statistics."""
@@ -312,9 +319,10 @@ def train_agent(
         # Save checkpoint
         if save_every > 0 and (episode + 1) % save_every == 0:
             agent.save_checkpoint(save_path)
+            loss_text = f"{avg_loss:.4f}" if avg_loss is not None else "N/A"
             print(f"Episode {episode + 1}: Score={info['score']}, "
                   f"Avg(50)={agent.mean_scores_history[-1]:.2f}, "
-                  f"Epsilon={agent.epsilon:.3f}, Loss={avg_loss:.4f if avg_loss else 'N/A'}")
+                  f"Epsilon={agent.epsilon:.3f}, Loss={loss_text}")
     
     # Final save
     agent.save_checkpoint(save_path)

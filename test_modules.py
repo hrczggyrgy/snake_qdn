@@ -7,9 +7,10 @@ Run this before launching the Streamlit app.
 import sys
 import numpy as np
 import torch
+from collections import deque
 
 # Add current directory to path
-sys.path.insert(0, '/home/lptop/Documents/coding/snake')
+sys.path.insert(0, '/home/lptop/Documents/coding/experiments/snake')
 
 def test_snake_env():
     """Test the Snake environment."""
@@ -172,6 +173,71 @@ def test_integration():
     print("  ✓ Integration test passed!\n")
 
 
+def test_timeout_semantics():
+    """Test that timeout returns truncated=True, not terminated."""
+    print("Testing Timeout Semantics...")
+    from snake_env import SnakeGameAI
+    
+    # Larger grid so snake doesn't hit wall before timeout
+    env = SnakeGameAI(grid_size=10, step_penalty=0.0, food_reward=0.0, death_penalty=-1.0)
+    
+    obs, _ = env.reset()
+    # Override max steps AFTER reset to a small value
+    env.max_steps_without_food = 3
+    
+    terminated = truncated = False
+    
+    for _ in range(5):
+        obs, reward, terminated, truncated, info = env.step(0)  # Go straight
+        if terminated or truncated:
+            break
+    
+    assert truncated == True, f"Expected truncated=True for timeout, got terminated={terminated}, truncated={truncated}"
+    assert terminated == False, f"Timeout should not set terminated=True"
+    print(f"  ✓ Timeout correctly returns truncated={truncated}, terminated={terminated}")
+    
+    env.close()
+    print("  ✓ Timeout semantics test passed!\n")
+
+
+def test_full_board_victory():
+    """Test that filling the board results in terminated=True (victory)."""
+    print("Testing Full Board Victory...")
+    from snake_env import SnakeGameAI
+    
+    # Use tiny grid to fill quickly
+    env = SnakeGameAI(grid_size=3)
+    
+    # Manually fill most of the board - snake head at (1,0), moving right
+    # Grid is 3x3, snake occupies 8 cells, food at last empty cell (0,0)
+    env.snake = deque([
+        (1, 0),  # head
+        (2, 0),  # body
+        (2, 1),  # body
+        (1, 1),  # body
+        (0, 1),  # body
+        (0, 2),  # body
+        (1, 2),  # body
+        (2, 2),  # body
+    ])
+    env.direction = 2  # Left (head at (1,0) moving left to (0,0))
+    env.food = (0, 0)  # Last empty cell
+    env.score = 7
+    
+    # Move straight (left) to eat food at (0,0)
+    obs, reward, terminated, truncated, info = env.step(0)  # Straight (left)
+    
+    assert terminated == True, f"Expected terminated=True for victory, got {terminated}"
+    assert truncated == False, f"Expected truncated=False for victory"
+    assert info['score'] == 8, f"Expected score=8 (3x3-1=8), got {info['score']}"
+    assert env.food is None, "Food should be None when board is full"
+    assert len(env.snake) == 9, f"Snake should fill board (9), got {len(env.snake)}"
+    print(f"  ✓ Full board victory: terminated={terminated}, score={info['score']}, len={len(env.snake)}")
+    
+    env.close()
+    print("  ✓ Full board victory test passed!\n")
+
+
 def test_save_load():
     """Test checkpoint saving and loading."""
     print("Testing Checkpoint Save/Load...")
@@ -192,9 +258,21 @@ def test_save_load():
     info = new_agent.load_checkpoint(save_path)
     print(f"  ✓ Checkpoint loaded: episode={info['episode']}, epsilon={info['epsilon']:.3f}, high_score={info['high_score']}")
     
+    # Verify returned metadata
     assert info['episode'] == 42
     assert info['high_score'] == 15
     assert abs(info['epsilon'] - 0.5) < 0.01
+    
+    # Verify agent state was actually restored
+    assert new_agent.n_games == 42, f"Expected n_games=42, got {new_agent.n_games}"
+    assert new_agent.high_score == 15, f"Expected high_score=15, got {new_agent.high_score}"
+    assert abs(new_agent.epsilon - 0.5) < 0.01, f"Expected epsilon=0.5, got {new_agent.epsilon}"
+    
+    # Verify Q-values are consistent (greedy action should match)
+    test_state = np.random.randn(11)
+    original_action = agent.get_action(test_state, training=False)
+    loaded_action = new_agent.get_action(test_state, training=False)
+    assert original_action == loaded_action, f"Greedy actions differ: {original_action} vs {loaded_action}"
     
     os.remove(save_path)
     print("  ✓ Save/Load test passed!\n")
@@ -210,6 +288,8 @@ if __name__ == "__main__":
         test_model()
         test_agent()
         test_integration()
+        test_timeout_semantics()
+        test_full_board_victory()
         test_save_load()
         
         print("=" * 50)

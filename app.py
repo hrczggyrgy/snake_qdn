@@ -203,7 +203,10 @@ def reset_game():
     if st.session_state.agent is not None:
         st.session_state.current_q_values = st.session_state.agent.get_q_values(obs)
         st.session_state.current_action_probs = st.session_state.agent.get_action_probs(obs)
-        acts = st.session_state.agent.model.get_activations(torch.FloatTensor(obs).unsqueeze(0))
+        # Move input to model's device for activation extraction
+        device = st.session_state.agent.trainer.device
+        obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(device)
+        acts = st.session_state.agent.model.get_activations(obs_tensor)
         st.session_state.activations = acts
 
 
@@ -252,30 +255,36 @@ def step_game(action=None):
     if st.session_state.agent is not None:
         st.session_state.current_q_values = st.session_state.agent.get_q_values(next_obs)
         st.session_state.current_action_probs = st.session_state.agent.get_action_probs(next_obs)
-        acts = st.session_state.agent.model.get_activations(torch.FloatTensor(next_obs).unsqueeze(0))
+        # Move input to model's device for activation extraction
+        device = st.session_state.agent.trainer.device
+        next_obs_tensor = torch.FloatTensor(next_obs).unsqueeze(0).to(device)
+        acts = st.session_state.agent.model.get_activations(next_obs_tensor)
         st.session_state.activations = acts
     
     # If episode ended, update stats
     if done:
         score = info['score']
-        st.session_state.training_stats['scores'].append(score)
-        st.session_state.score_history.append(score)
         
-        # Calculate rolling average
-        window = min(50, len(st.session_state.training_stats['scores']))
-        avg_score = np.mean(st.session_state.training_stats['scores'][-window:])
-        st.session_state.training_stats['mean_scores'].append(avg_score)
-        st.session_state.mean_score_history.append(avg_score)
-        
-        if score > st.session_state.training_stats['high_score']:
-            st.session_state.training_stats['high_score'] = score
-        
-        if st.session_state.agent:
-            st.session_state.agent.decay_epsilon()
-            st.session_state.training_stats['epsilon'].append(st.session_state.agent.epsilon)
-            st.session_state.epsilon_history.append(st.session_state.agent.epsilon)
-        
-        st.session_state.training_episode += 1
+        # Only update training stats and decay epsilon if actually training
+        if st.session_state.training:
+            st.session_state.training_stats['scores'].append(score)
+            st.session_state.score_history.append(score)
+            
+            # Calculate rolling average
+            window = min(50, len(st.session_state.training_stats['scores']))
+            avg_score = np.mean(st.session_state.training_stats['scores'][-window:])
+            st.session_state.training_stats['mean_scores'].append(avg_score)
+            st.session_state.mean_score_history.append(avg_score)
+            
+            if score > st.session_state.training_stats['high_score']:
+                st.session_state.training_stats['high_score'] = score
+            
+            if st.session_state.agent:
+                st.session_state.agent.decay_epsilon()
+                st.session_state.training_stats['epsilon'].append(st.session_state.agent.epsilon)
+                st.session_state.epsilon_history.append(st.session_state.agent.epsilon)
+            
+            st.session_state.training_episode += 1
         
         # Auto-reset for continuous training
         if st.session_state.training:
