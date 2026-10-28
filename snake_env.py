@@ -340,14 +340,15 @@ class SnakeGameAI:
                     img[y2-eye_offset-eye_size:y2-eye_offset, x2-eye_offset-eye_size:x2-eye_offset] = (255, 255, 255)
         
         # Draw food (red apple)
-        fx, fy = self.food
-        fx1, fy1 = fx * cell, fy * cell
-        fx2, fy2 = fx1 + cell, fy1 + cell
-        img[fy1:fy2, fx1:fx2] = (220, 50, 50)
-        
-        # Add shine to food
-        shine_size = cell // 4
-        img[fy1+2:fy1+2+shine_size, fx1+2:fx1+2+shine_size] = (255, 150, 150)
+        if self.food is not None:
+            fx, fy = self.food
+            fx1, fy1 = fx * cell, fy * cell
+            fx2, fy2 = fx1 + cell, fy1 + cell
+            img[fy1:fy2, fx1:fx2] = (220, 50, 50)
+            
+            # Add shine to food
+            shine_size = cell // 4
+            img[fy1+2:fy1+2+shine_size, fx1+2:fx1+2+shine_size] = (255, 150, 150)
         
         return img
     

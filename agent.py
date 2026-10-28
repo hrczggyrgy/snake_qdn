@@ -17,7 +17,11 @@ from model import Linear_QNet, QTrainer
 
 
 class ReplayMemory:
-    """Experience Replay Buffer with efficient sampling."""
+    """Experience Replay Buffer with efficient sampling.
+    
+    Stores terminated flag separately from truncated for correct
+    bootstrapping in Q-learning (terminated suppresses bootstrap).
+    """
     
     def __init__(self, capacity: int = 100_000):
         self.capacity = capacity
@@ -25,20 +29,30 @@ class ReplayMemory:
         self.position = 0
     
     def push(self, state: np.ndarray, action: int, reward: float, 
-             next_state: np.ndarray, done: bool) -> None:
-        """Add experience to memory."""
-        self.memory.append((state, action, reward, next_state, done))
+             next_state: np.ndarray, terminated: bool, truncated: bool) -> None:
+        """Add experience to memory.
+        
+        Args:
+            terminated: True if episode ended due to game-over (wall/self collision)
+            truncated: True if episode ended due to external limit (timeout)
+        """
+        self.memory.append((state, action, reward, next_state, terminated, truncated))
     
     def sample(self, batch_size: int) -> Tuple[np.ndarray, ...]:
-        """Sample random batch from memory."""
+        """Sample random batch from memory.
+        
+        Returns:
+            states, actions, rewards, next_states, terminated, truncated
+        """
         batch = random.sample(self.memory, batch_size)
-        states, actions, rewards, next_states, dones = zip(*batch)
+        states, actions, rewards, next_states, terminated, truncated = zip(*batch)
         return (
             np.array(states, dtype=np.float32),
             np.array(actions, dtype=np.int64),
             np.array(rewards, dtype=np.float32),
             np.array(next_states, dtype=np.float32),
-            np.array(dones, dtype=bool)
+            np.array(terminated, dtype=bool),
+            np.array(truncated, dtype=bool)
         )
     
     def __len__(self) -> int:
@@ -135,10 +149,16 @@ class Agent:
         action: int, 
         reward: float, 
         next_state: np.ndarray, 
-        done: bool
+        terminated: bool,
+        truncated: bool = False
     ) -> None:
-        """Store experience in replay memory."""
-        self.memory.push(state, action, reward, next_state, done)
+        """Store experience in replay memory.
+        
+        Args:
+            terminated: Episode ended due to game-over (suppresses bootstrap)
+            truncated: Episode ended due to external limit (keeps bootstrap)
+        """
+        self.memory.push(state, action, reward, next_state, terminated, truncated)
     
     def train_short_memory(
         self, 
@@ -146,16 +166,20 @@ class Agent:
         action: int, 
         reward: float, 
         next_state: np.ndarray, 
-        done: bool
+        terminated: bool
     ) -> float:
-        """Train on single step (for immediate feedback)."""
+        """Train on single step (for immediate feedback).
+        
+        Args:
+            terminated: True if episode ended due to game-over (suppresses bootstrap)
+        """
         state_t = torch.FloatTensor(state).unsqueeze(0)
         action_t = torch.LongTensor([action])
         reward_t = torch.FloatTensor([reward])
         next_state_t = torch.FloatTensor(next_state).unsqueeze(0)
-        done_t = torch.BoolTensor([done])
+        terminated_t = torch.BoolTensor([terminated])
         
-        loss = self.trainer.train_step(state_t, action_t, reward_t, next_state_t, done_t)
+        loss = self.trainer.train_step(state_t, action_t, reward_t, next_state_t, terminated_t)
         return loss
     
     def train_long_memory(self) -> Optional[float]:
@@ -163,15 +187,15 @@ class Agent:
         if not self.memory.is_ready(self.batch_size):
             return None
         
-        states, actions, rewards, next_states, dones = self.memory.sample(self.batch_size)
+        states, actions, rewards, next_states, terminated, truncated = self.memory.sample(self.batch_size)
         
         states_t = torch.FloatTensor(states)
         actions_t = torch.LongTensor(actions)
         rewards_t = torch.FloatTensor(rewards)
         next_states_t = torch.FloatTensor(next_states)
-        dones_t = torch.BoolTensor(dones)
+        terminated_t = torch.BoolTensor(terminated)
         
-        loss = self.trainer.train_step(states_t, actions_t, rewards_t, next_states_t, dones_t)
+        loss = self.trainer.train_step(states_t, actions_t, rewards_t, next_states_t, terminated_t)
         return loss
     
     def decay_epsilon(self) -> None:
@@ -285,11 +309,11 @@ def train_agent(
             next_state, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             
-            # Store in memory
-            agent.remember(state, action, reward, next_state, done)
+            # Store in memory (terminated controls bootstrap, done controls episode end)
+            agent.remember(state, action, reward, next_state, terminated, truncated)
             
-            # Train short memory (immediate)
-            loss = agent.train_short_memory(state, action, reward, next_state, done)
+            # Train short memory (immediate) - use terminated for bootstrap mask
+            loss = agent.train_short_memory(state, action, reward, next_state, terminated)
             if loss:
                 episode_loss.append(loss)
             

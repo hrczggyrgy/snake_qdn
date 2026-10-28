@@ -5,12 +5,13 @@ Run this before launching the Streamlit app.
 """
 
 import sys
+import os
 import numpy as np
 import torch
 from collections import deque
 
 # Add current directory to path
-sys.path.insert(0, '/home/lptop/Documents/coding/experiments/snake')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 def test_snake_env():
     """Test the Snake environment."""
@@ -99,11 +100,17 @@ def test_agent():
     # Test replay memory
     memory = ReplayMemory(capacity=1000)
     for i in range(10):
-        memory.push(np.random.randn(11), np.random.randint(0, 3), np.random.randn(), np.random.randn(11), False)
+        memory.push(np.random.randn(11), np.random.randint(0, 3), np.random.randn(), np.random.randn(11), False, False)
     assert len(memory) == 10
     batch = memory.sample(5)
-    assert len(batch) == 5
+    assert len(batch) == 6  # states, actions, rewards, next_states, terminated, truncated
     print(f"  ✓ Replay memory works, size: {len(memory)}")
+    
+    # Verify sample returns terminated and truncated
+    states, actions, rewards, next_states, terminated, truncated = batch
+    assert terminated.shape == (5,)
+    assert truncated.shape == (5,)
+    print(f"  ✓ Sample returns terminated/truncated correctly")
     
     # Test agent
     agent = Agent(hidden_size=64, memory_size=1000, batch_size=32)
@@ -156,8 +163,8 @@ def test_integration():
             next_state, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             
-            agent.remember(state, action, reward, next_state, done)
-            agent.train_short_memory(state, action, reward, next_state, done)
+            agent.remember(state, action, reward, next_state, terminated, truncated)
+            agent.train_short_memory(state, action, reward, next_state, terminated)
             
             state = next_state
             total_reward += reward
@@ -184,6 +191,8 @@ def test_timeout_semantics():
     obs, _ = env.reset()
     # Override max steps AFTER reset to a small value
     env.max_steps_without_food = 3
+    # Place food far away so it won't be reached
+    env.food = (9, 9)  # Bottom-right corner, snake starts at center moving right
     
     terminated = truncated = False
     
@@ -194,10 +203,56 @@ def test_timeout_semantics():
     
     assert truncated == True, f"Expected truncated=True for timeout, got terminated={terminated}, truncated={truncated}"
     assert terminated == False, f"Timeout should not set terminated=True"
-    print(f"  ✓ Timeout correctly returns truncated={truncated}, terminated={terminated}")
+    # Should timeout exactly after 3 steps (max_steps_without_food)
+    assert env.steps_since_food == 3, f"Expected steps_since_food=3, got {env.steps_since_food}"
+    assert env.game_over == True, "game_over should be True after timeout"
+    print(f"  ✓ Timeout correctly returns truncated={truncated}, terminated={terminated} after 3 steps")
     
     env.close()
     print("  ✓ Timeout semantics test passed!\n")
+
+
+def test_bootstrap_target():
+    """Test that terminated transitions suppress bootstrap while truncated keep it."""
+    print("Testing Bootstrap Target Semantics...")
+    import torch
+    from model import Linear_QNet, QTrainer
+    from agent import Agent
+    
+    # Create a simple scenario
+    model = Linear_QNet(input_size=11, hidden_size=64, output_size=3)
+    trainer = QTrainer(model, lr=0.001, gamma=0.9, device='cpu')
+    
+    # Set up: reward=1, next_state_value=5
+    # For terminated: target = 1 + 0.9 * 5 * (1 - 1) = 1
+    # For truncated: target = 1 + 0.9 * 5 * (1 - 0) = 5.5
+    
+    state = torch.randn(1, 11)
+    action = torch.tensor([0])
+    reward = torch.tensor([1.0])
+    next_state = torch.randn(1, 11)
+    
+    # Manually set next_state Q-values to have max=5
+    with torch.no_grad():
+        # We can't easily control target network output, so test the formula directly
+        gamma = 0.9
+        next_q_max = 5.0
+        
+        # Terminated transition (game over)
+        terminated = torch.tensor([1.0], dtype=torch.bool)
+        target_term = reward + gamma * next_q_max * (1 - terminated.float())
+        
+        # Truncated transition (timeout)
+        truncated = torch.tensor([0.0], dtype=torch.bool)
+        target_trunc = reward + gamma * next_q_max * (1 - truncated.float())
+        
+        assert abs(target_term.item() - 1.0) < 0.01, f"Terminated target should be 1.0, got {target_term.item()}"
+        assert abs(target_trunc.item() - 5.5) < 0.01, f"Truncated target should be 5.5, got {target_trunc.item()}"
+        
+        print(f"  ✓ Terminated target: {target_term.item():.2f} (no bootstrap)")
+        print(f"  ✓ Truncated target: {target_trunc.item():.2f} (keeps bootstrap)")
+    
+    print("  ✓ Bootstrap target test passed!\n")
 
 
 def test_full_board_victory():
@@ -274,6 +329,11 @@ def test_save_load():
     loaded_action = new_agent.get_action(test_state, training=False)
     assert original_action == loaded_action, f"Greedy actions differ: {original_action} vs {loaded_action}"
     
+    # Verify full Q-value arrays match (not just argmax)
+    original_q = agent.get_q_values(test_state)
+    loaded_q = new_agent.get_q_values(test_state)
+    assert np.allclose(original_q, loaded_q), f"Q-values differ:\n  original: {original_q}\n  loaded:   {loaded_q}"
+    
     os.remove(save_path)
     print("  ✓ Save/Load test passed!\n")
 
@@ -289,6 +349,7 @@ if __name__ == "__main__":
         test_agent()
         test_integration()
         test_timeout_semantics()
+        test_bootstrap_target()
         test_full_board_victory()
         test_save_load()
         

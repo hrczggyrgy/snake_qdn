@@ -169,7 +169,7 @@ class QTrainer:
         actions: torch.Tensor,
         rewards: torch.Tensor,
         next_states: torch.Tensor,
-        dones: torch.Tensor
+        terminated: torch.Tensor
     ) -> float:
         """
         Perform one training step using Bellman equation.
@@ -179,8 +179,10 @@ class QTrainer:
             actions: Batch of actions taken (batch_size,)
             rewards: Batch of rewards received (batch_size,)
             next_states: Batch of next states (batch_size, 11)
-            dones: Batch of done flags (batch_size,)
-            
+            terminated: Batch of terminated flags (batch_size,)
+                       True = game over (suppress bootstrap)
+                       False = continue or truncated (keep bootstrap)
+                       
         Returns:
             Loss value
         """
@@ -191,17 +193,18 @@ class QTrainer:
         actions = actions.to(self.device)
         rewards = rewards.to(self.device)
         next_states = next_states.to(self.device)
-        dones = dones.to(self.device)
+        terminated = terminated.to(self.device)
         
         # Current Q-values: Q(s, a)
         current_q_values = self.model(states)
         current_q_values = current_q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
         
-        # Target Q-values: r + gamma * max_a' Q'(s', a') * (1 - done)
+        # Target Q-values: r + gamma * max_a' Q'(s', a') * (1 - terminated)
+        # Only suppress bootstrap on actual termination, not truncation
         with torch.no_grad():
             next_q_values = self.target_model(next_states)
             max_next_q_values = next_q_values.max(1)[0]
-            target_q_values = rewards + (self.gamma * max_next_q_values * (1 - dones.float()))
+            target_q_values = rewards + (self.gamma * max_next_q_values * (1 - terminated.float()))
         
         # Compute loss
         loss = self.criterion(current_q_values, target_q_values)

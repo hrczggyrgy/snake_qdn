@@ -141,6 +141,9 @@ def init_session_state():
         
         # Network activations for visualization
         'activations': None,
+        
+        # Decision snapshot (pre-action)
+        'decision_snapshot': None,
     }
     
     for key, value in defaults.items():
@@ -215,6 +218,30 @@ def step_game(action=None):
     if st.session_state.game_over or st.session_state.env is None:
         return
     
+    # === CAPTURE PRE-ACTION DECISION SNAPSHOT ===
+    # This is what the agent saw and decided BEFORE stepping
+    if st.session_state.agent is not None and st.session_state.current_observation is not None:
+        pre_q_values = st.session_state.agent.get_q_values(st.session_state.current_observation)
+        pre_action_probs = st.session_state.agent.get_action_probs(st.session_state.current_observation)
+        
+        # Determine selection reason
+        if st.session_state.training and random.random() < st.session_state.agent.epsilon:
+            selection_reason = "exploring"
+        elif action is not None:
+            selection_reason = "manual"
+        else:
+            selection_reason = "exploiting"
+        
+        # Store decision snapshot for visualization
+        st.session_state.decision_snapshot = {
+            'observation': st.session_state.current_observation.copy(),
+            'q_values': pre_q_values.copy(),
+            'action_probs': pre_action_probs.copy(),
+            'action': action,
+            'epsilon': st.session_state.agent.epsilon,
+            'reason': selection_reason,
+        }
+    
     # Get action from agent if not provided
     if action is None and st.session_state.agent is not None:
         action = st.session_state.agent.get_action(
@@ -230,12 +257,13 @@ def step_game(action=None):
     
     # Store transition if training
     if st.session_state.training and st.session_state.agent is not None:
+        # Use terminated for bootstrap mask, truncated is stored separately
         st.session_state.agent.remember(
-            st.session_state.current_observation, action, reward, next_obs, done
+            st.session_state.current_observation, action, reward, next_obs, terminated, truncated
         )
-        # Train on short memory
+        # Train on short memory - use terminated for bootstrap
         loss = st.session_state.agent.train_short_memory(
-            st.session_state.current_observation, action, reward, next_obs, done
+            st.session_state.current_observation, action, reward, next_obs, terminated
         )
         # Train on replay memory
         replay_loss = st.session_state.agent.train_long_memory()
@@ -244,6 +272,9 @@ def step_game(action=None):
         if replay_loss:
             st.session_state.training_stats['loss'].append(replay_loss)
             st.session_state.loss_history.append(replay_loss)
+        
+        # Sync agent's step counter
+        st.session_state.agent.total_steps += 1
     
     # Update state
     st.session_state.current_observation = next_obs
@@ -251,7 +282,7 @@ def step_game(action=None):
     st.session_state.game_over = done
     st.session_state.current_action = action
     
-    # Update Q-values and activations for visualization
+    # Update Q-values and activations for NEXT state visualization
     if st.session_state.agent is not None:
         st.session_state.current_q_values = st.session_state.agent.get_q_values(next_obs)
         st.session_state.current_action_probs = st.session_state.agent.get_action_probs(next_obs)
@@ -267,25 +298,24 @@ def step_game(action=None):
         
         # Only update training stats and decay epsilon if actually training
         if st.session_state.training:
-            st.session_state.training_stats['scores'].append(score)
-            st.session_state.score_history.append(score)
-            
-            # Calculate rolling average
-            window = min(50, len(st.session_state.training_stats['scores']))
-            avg_score = np.mean(st.session_state.training_stats['scores'][-window:])
-            st.session_state.training_stats['mean_scores'].append(avg_score)
-            st.session_state.mean_score_history.append(avg_score)
-            
-            if score > st.session_state.training_stats['high_score']:
-                st.session_state.training_stats['high_score'] = score
-            
+            # Update agent's stats (authoritative source)
             if st.session_state.agent:
-                st.session_state.agent.decay_epsilon()
-                st.session_state.training_stats['epsilon'].append(st.session_state.agent.epsilon)
-                st.session_state.epsilon_history.append(st.session_state.agent.epsilon)
+                st.session_state.agent.update_stats(score)
+                # Dashboard mirrors agent's stats
+                st.session_state.training_stats['scores'] = st.session_state.agent.scores_history.copy()
+                st.session_state.training_stats['mean_scores'] = st.session_state.agent.mean_scores_history.copy()
+                st.session_state.training_stats['epsilon'] = st.session_state.agent.epsilon_history.copy()
+                st.session_state.training_stats['high_score'] = st.session_state.agent.high_score
+                st.session_state.training_episode = st.session_state.agent.n_games
+                
+                # Sync history deques
+                st.session_state.score_history.clear()
+                st.session_state.score_history.extend(st.session_state.agent.scores_history)
+                st.session_state.mean_score_history.clear()
+                st.session_state.mean_score_history.extend(st.session_state.agent.mean_scores_history)
+                st.session_state.epsilon_history.clear()
+                st.session_state.epsilon_history.extend(st.session_state.agent.epsilon_history)
             
-            st.session_state.training_episode += 1
-        
         # Auto-reset for continuous training
         if st.session_state.training:
             time.sleep(0.1)  # Brief pause
@@ -364,16 +394,17 @@ def render_game_grid():
                 fig.add_shape(type="circle", x0=x+0.6, y0=y+0.65, x1=x+0.8, y1=y+0.85,
                             fillcolor="white", line=dict(width=0))
     
-    # Food
-    fx, fy = food
-    fig.add_shape(
-        type="circle", x0=fx+0.1, y0=fy+0.1, x1=fx+0.9, y1=fy+0.9,
-        fillcolor='#FF4444', line=dict(color='#CC0000', width=2), layer="above"
-    )
-    fig.add_shape(
-        type="circle", x0=fx+0.2, y0=fy+0.2, x1=fx+0.4, y1=fy+0.4,
-        fillcolor='#FFAAAA', line=dict(width=0), layer="above"
-    )
+    # Food (guard for victory state where food=None)
+    if food is not None:
+        fx, fy = food
+        fig.add_shape(
+            type="circle", x0=fx+0.1, y0=fy+0.1, x1=fx+0.9, y1=fy+0.9,
+            fillcolor='#FF4444', line=dict(color='#CC0000', width=2), layer="above"
+        )
+        fig.add_shape(
+            type="circle", x0=fx+0.2, y0=fy+0.2, x1=fx+0.4, y1=fy+0.4,
+            fillcolor='#FFAAAA', line=dict(width=0), layer="above"
+        )
     
     # Game over overlay
     if game_over:
@@ -486,12 +517,23 @@ def render_q_values():
 
 def render_network_architecture():
     """Render compact neural network architecture."""
-    if st.session_state.activations is None:
+    if st.session_state.activations is None or st.session_state.agent is None:
         return None
     
     acts = st.session_state.activations
-    layer_sizes = [11, 256, 256, 3]
-    layer_names = ['Input (11)', 'Hidden 1 (256)', 'Hidden 2 (256)', 'Output (3)']
+    model = st.session_state.agent.model
+    
+    # Derive layer sizes from actual model
+    layer_sizes = [
+        model.fc1.in_features,
+        model.fc1.out_features,
+        model.fc2.out_features,
+        model.fc3.out_features,
+    ]
+    layer_names = [f'Input ({layer_sizes[0]})', 
+                   f'Hidden 1 ({layer_sizes[1]})', 
+                   f'Hidden 2 ({layer_sizes[2]})', 
+                   f'Output ({layer_sizes[3]})']
     
     fig = go.Figure()
     layer_x = [0, 1, 2, 3]
@@ -847,20 +889,74 @@ def main():
         
         with nc2:
             st.write("**Decision Making**")
-            fig_q, fig_p = render_q_values()
-            if fig_q:
-                st.plotly_chart(fig_q, width=380, key="q_chart", config={'displayModeBar': False})
-            if fig_p:
-                st.plotly_chart(fig_p, width=380, key="prob_chart", config={'displayModeBar': False})
             
-            # Current action display
-            if st.session_state.current_action is not None:
-                action_names = ['⬆️ Straight', '➡️ Right', '⬅️ Left']
-                action_emoji = action_names[st.session_state.current_action]
-                if st.session_state.training and st.session_state.agent and random.random() < st.session_state.agent.epsilon:
-                    st.info(f"🎲 Exploring: {action_emoji}")
+            # Use decision snapshot (pre-action) if available, else fall back to current
+            snap = st.session_state.decision_snapshot
+            if snap is not None:
+                q_vals = snap['q_values']
+                action_idx = snap['action']
+                action_names = ['Straight', 'Right', 'Left']
+                epsilon = snap['epsilon']
+                reason = snap['reason']
+                
+                # Actual epsilon-greedy policy probabilities
+                # P(a) = epsilon/3 + (1-epsilon) * 1[a == argmax]
+                greedy_action = int(np.argmax(q_vals))
+                actual_probs = np.full(3, epsilon / 3.0)
+                actual_probs[greedy_action] += 1.0 - epsilon
+            else:
+                q_vals = st.session_state.current_q_values
+                action_idx = st.session_state.current_action
+                action_names = ['Straight', 'Right', 'Left']
+                epsilon = st.session_state.agent.epsilon if st.session_state.agent else 0
+                reason = "unknown"
+                actual_probs = st.session_state.current_action_probs
+                greedy_action = int(np.argmax(q_vals)) if q_vals is not None else 0
+            
+            if q_vals is not None:
+                # Q-Values chart (from decision snapshot)
+                q_colors = ['#44FF44' if i == action_idx else '#666666' for i in range(3)]
+                fig_q = go.Figure()
+                fig_q.add_trace(go.Bar(
+                    x=action_names, y=q_vals, marker_color=q_colors,
+                    text=[f'{v:.2f}' for v in q_vals], textposition='outside',
+                    textfont=dict(color='white', size=11), showlegend=False
+                ))
+                fig_q.update_layout(
+                    title=dict(text="Q-Values (at decision time)", font=dict(size=12)),
+                    height=180, margin=dict(l=20, r=10, t=30, b=10),
+                    yaxis=dict(showgrid=True, gridcolor='rgba(100,100,100,0.2)'),
+                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='white', size=9)
+                )
+                st.plotly_chart(fig_q, width=380, key="q_chart", config={'displayModeBar': False})
+                
+                # Actual epsilon-greedy policy probabilities
+                p_colors = ['#FFD700' if i == action_idx else '#555555' for i in range(3)]
+                fig_p = go.Figure()
+                fig_p.add_trace(go.Bar(
+                    x=action_names, y=actual_probs, marker_color=p_colors,
+                    text=[f'{p:.0%}' for p in actual_probs], textposition='outside',
+                    textfont=dict(color='white', size=11), showlegend=False
+                ))
+                fig_p.update_layout(
+                    title=dict(text=f"Policy (ε-greedy, ε={epsilon:.3f})", font=dict(size=12)),
+                    height=180, margin=dict(l=20, r=10, t=30, b=10),
+                    yaxis=dict(range=[0, 1.1], showgrid=True, gridcolor='rgba(100,100,100,0.2)'),
+                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='white', size=9)
+                )
+                st.plotly_chart(fig_p, width=380, key="prob_chart", config={'displayModeBar': False})
+                
+                # Selection reason display
+                if reason == "exploring":
+                    st.info(f"🎲 **Exploring** (ε={epsilon:.3f}): {action_names[action_idx]} chosen randomly")
+                elif reason == "manual":
+                    st.info(f"👤 **Manual**: {action_names[action_idx]} chosen by user")
                 else:
-                    st.success(f"🎯 Exploiting: {action_emoji}")
+                    st.success(f"🎯 **Exploiting** (ε={epsilon:.3f}): {action_names[action_idx]} = argmax Q")
+            else:
+                st.info("No decision data yet")
     
     # ----- TAB 3: ANALYTICS -----
     with tab3:
