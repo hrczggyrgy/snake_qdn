@@ -142,9 +142,6 @@ def render_primary_toolbar(controller: TrainingController) -> None:
                     del st.session_state.last_decision
                 st.rerun()
 
-        # Row 3: Status badge (compact)
-        st.caption(render_status_badge_inline(controller), unsafe_allow_html=True)
-
 
 def _handle_step_once(controller: TrainingController) -> None:
     """Handle Step Once button press with explicit terminal board behavior."""
