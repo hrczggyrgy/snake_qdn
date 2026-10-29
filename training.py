@@ -17,6 +17,50 @@ from agent import Agent
 from snake_env import SnakeGameAI
 
 
+class EventType(Enum):
+    """Explicit event types emitted at transition/episode source."""
+    FOOD_EATEN = "food_eaten"
+    EPISODE_END = "episode_end"
+    REPLAY_ACTIVE = "replay_active"
+    NEW_RECORD = "new_record"
+    MODE_CHANGE = "mode_change"
+    CHECKPOINT_LOAD = "checkpoint_load"
+    CHECKPOINT_SAVE = "checkpoint_save"
+    BOARD_RESTART = "board_restart"
+    HISTORY_CLEAR = "history_clear"
+    NEW_RUN = "new_run"
+
+
+@dataclass(frozen=True)
+class TrainingEvent:
+    """Explicit training event with stable ID and metadata."""
+    id: int
+    type: EventType
+    message: str
+    timestamp: float
+    # Context data
+    episode: int | None = None
+    step: int | None = None
+    score: int | None = None
+    termination_reason: str | None = None  # wall, self, timeout, victory
+    run_id: int | None = None
+    episode_id: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "type": self.type.value,
+            "message": self.message,
+            "timestamp": self.timestamp,
+            "episode": self.episode,
+            "step": self.step,
+            "score": self.score,
+            "termination_reason": self.termination_reason,
+            "run_id": self.run_id,
+            "episode_id": self.episode_id,
+        }
+
+
 class ActivityMode(Enum):
     """Activity mode determining who acts and whether learning occurs."""
 
@@ -64,6 +108,9 @@ class TrainingSnapshot:
     # Performance metrics (copied for snapshot isolation)
     metrics: dict[str, Any] = field(default_factory=dict)
 
+    # Events (recent, for UI)
+    recent_events: list[TrainingEvent] = field(default_factory=list)
+
     def __post_init__(self):
         # Ensure arrays are copied (frozen dataclass doesn't deep-copy numpy arrays)
         object.__setattr__(
@@ -81,6 +128,7 @@ class TrainingSnapshot:
         object.__setattr__(self, "recent_mean_scores", list(self.recent_mean_scores))
         object.__setattr__(self, "recent_epsilon", list(self.recent_epsilon))
         object.__setattr__(self, "recent_loss", list(self.recent_loss))
+        object.__setattr__(self, "recent_events", list(self.recent_events))
 
 
 @dataclass
@@ -208,6 +256,12 @@ class TrainingController:
             "last_transition_time": None,
         }
 
+        # Event system
+        self._event_counter = 0
+        self._events: list[TrainingEvent] = []
+        self._max_events = 200
+        self._replay_warmed_up = False
+
     # -------------------------------------------------------------------------
     # Properties (read-only access to internal state)
     # -------------------------------------------------------------------------
@@ -310,6 +364,51 @@ class TrainingController:
         return metrics
 
     # -------------------------------------------------------------------------
+    # Event System
+    # -------------------------------------------------------------------------
+
+    def _emit_event(
+        self,
+        event_type: EventType,
+        message: str,
+        episode: int | None = None,
+        step: int | None = None,
+        score: int | None = None,
+        termination_reason: str | None = None,
+    ) -> TrainingEvent:
+        """Emit an explicit training event."""
+        self._event_counter += 1
+        event = TrainingEvent(
+            id=self._event_counter,
+            type=event_type,
+            message=message,
+            timestamp=time.monotonic(),
+            episode=episode if episode is not None else self.episode,
+            step=step if step is not None else self._step_id,
+            score=score,
+            termination_reason=termination_reason,
+            run_id=self._run_id,
+            episode_id=self._episode_id,
+        )
+        self._events.append(event)
+        if len(self._events) > self._max_events:
+            self._events = self._events[-self._max_events:]
+        return event
+
+    def get_events(self, since_id: int = 0) -> list[TrainingEvent]:
+        """Get events newer than since_id."""
+        return [e for e in self._events if e.id > since_id]
+
+    def get_all_events(self) -> list[TrainingEvent]:
+        """Get all events (copy)."""
+        return list(self._events)
+
+    def clear_events(self) -> None:
+        """Clear event history."""
+        self._events.clear()
+        self._event_counter = 0
+
+    # -------------------------------------------------------------------------
     # Component Creation
     # -------------------------------------------------------------------------
 
@@ -345,7 +444,13 @@ class TrainingController:
 
     def set_mode(self, mode: ActivityMode) -> None:
         """Set activity mode (TRAIN/EVALUATE/MANUAL)."""
+        old_mode = self._mode
         self._mode = mode
+        if old_mode != mode:
+            self._emit_event(
+                EventType.MODE_CHANGE,
+                f"Mode changed: {old_mode.value} → {mode.value}",
+            )
 
     def set_paused(self, paused: bool) -> None:
         """Set paused state."""
@@ -356,6 +461,10 @@ class TrainingController:
         # Ensure agent exists so _reset_episode can compute initial Q-values
         _ = self.agent
         self._reset_episode()
+        self._emit_event(
+            EventType.BOARD_RESTART,
+            "Board restarted",
+        )
 
     def clear_history(self) -> None:
         """Clear displayed charts and statistics, keep model weights and replay buffer."""
@@ -363,6 +472,11 @@ class TrainingController:
             self._agent.reset_stats()
         self._episode_id = 0
         self._step_id = 0
+        self.clear_events()
+        self._emit_event(
+            EventType.HISTORY_CLEAR,
+            "Training history cleared",
+        )
 
     def new_run(self) -> None:
         """Create fresh agent and replay buffer, discard current model."""
@@ -371,7 +485,13 @@ class TrainingController:
         self._run_id += 1
         self._episode_id = 0
         self._step_id = 0
+        self._replay_warmed_up = False
+        self.clear_events()
         self._reset_episode()
+        self._emit_event(
+            EventType.NEW_RUN,
+            "New training run started",
+        )
 
     def update_env_config(self, config: EnvConfig) -> None:
         """Update environment configuration and recreate env/agent."""
@@ -381,13 +501,24 @@ class TrainingController:
         self._run_id += 1
         self._episode_id = 0
         self._step_id = 0
+        self._replay_warmed_up = False
+        self.clear_events()
         self._reset_episode()
+        self._emit_event(
+            EventType.MODE_CHANGE,
+            "Environment config updated — new run",
+        )
 
     def update_agent_config(self, config: AgentConfig) -> None:
         """Update agent configuration and recreate agent."""
         self.agent_config = config
         self._agent = self._create_agent()
         self._reset_episode()
+        self.clear_events()
+        self._emit_event(
+            EventType.MODE_CHANGE,
+            "Agent config updated — new agent created",
+        )
 
     # -------------------------------------------------------------------------
     # Public API - Step Operations
@@ -449,6 +580,17 @@ class TrainingController:
         self._metrics["time_env_step"] += time.monotonic() - t_env_start
         done = terminated or truncated
 
+        # --- Emit FOOD_EATEN event ---
+        # Food reward is positive and distinct from step penalty
+        if reward > 0 and self._mode == ActivityMode.TRAIN:
+            # Check if this is actually food (not death penalty which is negative)
+            if reward == self.env_config.food_reward or reward > self.env_config.food_reward * 0.5:
+                self._emit_event(
+                    EventType.FOOD_EATEN,
+                    f"Food eaten! Score: {info['score']}",
+                    score=info["score"],
+                )
+
         # --- Learning (only in TRAIN mode) ---
         replay_loss = None
         if self._mode == ActivityMode.TRAIN and self._agent is not None:
@@ -463,7 +605,17 @@ class TrainingController:
 
             # Update replay metrics
             self._metrics["replay_buffer_size"] = len(self._agent.memory)
-            self._metrics["replay_active"] = self._agent.memory.is_ready(self._agent.batch_size)
+            replay_ready = self._agent.memory.is_ready(self._agent.batch_size)
+            self._metrics["replay_active"] = replay_ready
+
+            # Emit REPLAY_ACTIVE event once when replay becomes ready
+            if replay_ready and not self._replay_warmed_up:
+                self._replay_warmed_up = True
+                self._emit_event(
+                    EventType.REPLAY_ACTIVE,
+                    "Replay buffer ready — replay training active",
+                )
+
             if replay_loss is not None:
                 self._metrics["optimizer_updates"] += 1
 
@@ -487,7 +639,7 @@ class TrainingController:
 
         # --- Handle episode completion ---
         if done:
-            self._handle_episode_end(info["score"], replay_loss)
+            self._handle_episode_end(info["score"], replay_loss, terminated, truncated, info)
             self._metrics["episodes_completed"] += 1
 
         # Update total training time
@@ -517,15 +669,87 @@ class TrainingController:
             q_values = agent.get_q_values(self._observation)
             return 0, "manual", q_values
 
-    def _handle_episode_end(self, score: int, replay_loss: float | None) -> None:
-        """Handle episode completion: update stats, decay epsilon (TRAIN only)."""
+    def _handle_episode_end(
+        self,
+        score: int,
+        replay_loss: float | None,
+        terminated: bool,
+        truncated: bool,
+        info: dict[str, Any],
+    ) -> None:
+        """Handle episode completion: update stats, decay epsilon (TRAIN only), emit event."""
+        # Classify termination reason
+        termination_reason = self._classify_termination(terminated, truncated, info)
+
+        reason_labels = {
+            "wall": "wall collision",
+            "self": "self collision",
+            "timeout": "timeout",
+            "victory": "board completed",
+        }
+        reason_text = reason_labels.get(termination_reason, "unknown")
+
+        # Emit EPISODE_END event
+        self._emit_event(
+            EventType.EPISODE_END,
+            f"Episode {self.episode + 1} ended: {reason_text} · Score: {score}",
+            score=score,
+            termination_reason=termination_reason,
+        )
+
+        # Check for new high score
+        if self._agent and score > self._agent.high_score:
+            self._emit_event(
+                EventType.NEW_RECORD,
+                f"New record! {score}",
+                score=score,
+            )
+
         if self._mode == ActivityMode.TRAIN and self._agent is not None:
             # Update agent's authoritative stats
-            self._agent.update_stats(score, replay_loss)
+            self._agent.update_stats(score, replay_loss, termination_reason)
             # Decay epsilon ONCE per completed training episode
             self._agent.decay_epsilon()
 
             self._episode_id += 1
+        else:
+            # For EVALUATE/MANUAL, still track episode_id for UI
+            self._episode_id += 1
+
+    def _classify_termination(
+        self, terminated: bool, truncated: bool, info: dict[str, Any]
+    ) -> str:
+        """Classify episode termination reason from environment info."""
+        if truncated:
+            return "timeout"
+
+        if not terminated:
+            return "unknown"
+
+        # terminated=True - check collision type using game state
+        game_state = self._game_state or {}
+        # Food is None means board full (victory)
+        if game_state.get("food") is None:
+            return "victory"
+
+        # Check if head collided with wall or self
+        snake = game_state.get("snake", [])
+        if not snake:
+            return "wall"  # fallback
+
+        head = snake[0]
+        grid_size = game_state.get("grid_size", 20)
+
+        # Wall collision
+        if head[0] < 0 or head[0] >= grid_size or head[1] < 0 or head[1] >= grid_size:
+            return "wall"
+
+        # Self collision (head in body)
+        if head in snake[1:]:
+            return "self"
+
+        # Default to wall if we can't determine
+        return "wall"
 
     def _reset_episode(self) -> None:
         """Reset environment for new episode, keep agent state."""
@@ -573,6 +797,9 @@ class TrainingController:
             recent_epsilon = []
             recent_loss = []
 
+        # Get recent events (last 20)
+        recent_events = self._events[-20:] if self._events else []
+
         return TrainingSnapshot(
             observation=obs if obs is not None else np.zeros(11, dtype=np.float32),
             game_state=self._game_state or {},
@@ -595,6 +822,7 @@ class TrainingController:
             episode_id=self._episode_id,
             step_id=self._step_id,
             metrics=self.get_metrics(),
+            recent_events=recent_events,
         )
 
     def get_snapshot(self) -> TrainingSnapshot:
@@ -617,6 +845,12 @@ class TrainingController:
         info = self._agent.load_checkpoint(filepath)
         # Sync internal counters
         self._episode_id = self._agent.n_games
+        self.clear_events()
+        self._replay_warmed_up = self._agent.memory.is_ready(self._agent.batch_size)
+        self._emit_event(
+            EventType.CHECKPOINT_LOAD,
+            f"Loaded checkpoint: ep {info.get('episode', 0)}, ε={info.get('epsilon', 1.0):.3f}",
+        )
         return info
 
     # -------------------------------------------------------------------------
@@ -667,7 +901,7 @@ def train_headless(
         if not episode_done:
             # Manually update stats for truncated episode
             if controller.agent is not None:
-                controller.agent.update_stats(controller.score, None)
+                controller.agent.update_stats(controller.score, None, "timeout")
                 controller.agent.decay_epsilon()
                 controller._episode_id += 1
 

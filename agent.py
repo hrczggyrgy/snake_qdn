@@ -124,6 +124,7 @@ class Agent:
         self.mean_scores_history: list[float] = []
         self.epsilon_history: list[float] = []
         self.loss_history: list[float] = []
+        self.termination_history: dict[str, int] = {"wall": 0, "self": 0, "timeout": 0, "victory": 0}
 
         # For step-by-step mode
         self.last_state: np.ndarray | None = None
@@ -266,8 +267,14 @@ class Agent:
         """Decay exploration rate."""
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
 
-    def update_stats(self, score: int, loss: float | None = None) -> None:
-        """Update training statistics."""
+    def update_stats(self, score: int, loss: float | None = None, termination_reason: str | None = None) -> None:
+        """Update training statistics.
+
+        Args:
+            score: Final score of the episode
+            loss: Average loss for the episode (optional)
+            termination_reason: One of 'wall', 'self', 'timeout', 'victory' (optional)
+        """
         self.n_games += 1
         self.scores_history.append(score)
         self.epsilon_history.append(self.epsilon)
@@ -282,6 +289,10 @@ class Agent:
 
         if loss is not None:
             self.loss_history.append(loss)
+
+        # Track termination reason
+        if termination_reason and termination_reason in self.termination_history:
+            self.termination_history[termination_reason] += 1
 
     def save_checkpoint(self, filepath: str) -> None:
         """Save agent checkpoint (backward compatible - saves training state)."""

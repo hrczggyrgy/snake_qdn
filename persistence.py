@@ -55,6 +55,7 @@ class TrainingState:
     rng_state_numpy: Any
     rng_state_torch: Any
     rng_state_cuda: Any | None = None
+    termination_history: dict[str, int] | None = None
 
 
 def get_model_config(model: torch.nn.Module) -> ModelConfig:
@@ -209,6 +210,7 @@ def load_checkpoint(
             "rng_state_numpy": None,
             "rng_state_torch": None,
             "rng_state_cuda": None,
+            "termination_history": {"wall": 0, "self": 0, "timeout": 0, "victory": 0},
         }
 
     training_state = TrainingState(**training_state_dict)
@@ -302,6 +304,7 @@ class CheckpointManager:
             rng_state_numpy=rng_numpy,
             rng_state_torch=rng_torch,
             rng_state_cuda=rng_cuda,
+            termination_history=self.agent.termination_history.copy(),
         )
 
         model_config = get_model_config(self.agent.model)
@@ -337,6 +340,7 @@ class CheckpointManager:
         self.agent.mean_scores_history = training_state.mean_scores_history
         self.agent.epsilon_history = training_state.epsilon_history
         self.agent.trainer.loss_history = training_state.loss_history
+        self.agent.termination_history = training_state.termination_history or {"wall": 0, "self": 0, "timeout": 0, "victory": 0}
 
         # Restore replay buffer
         self.agent.memory.memory = deque(training_state.memory, maxlen=self.agent.memory.capacity)
