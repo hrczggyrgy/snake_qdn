@@ -415,7 +415,7 @@ def render_outcome_summary(
             if reason in counts:
                 counts[reason] += 1
         completed = len(recent_terminations)
-        denominator = completed
+        denominator = max(completed, 1)  # Avoid division by zero
         source_label = f"last {completed}"
     elif termination_counts and sum(termination_counts.values()) > 0:
         counts = termination_counts
@@ -453,7 +453,8 @@ def render_outcome_summary(
     # Remaining (incomplete to fill window)
     remaining = max(0, window - completed)
     if remaining > 0:
-        pct = remaining / denominator * 100
+        # Use max(denominator, 1) to avoid division by zero, but show as proportion of window
+        pct = remaining / max(denominator, 1) * 100
         segments.append(
             f'<div class="sqdn-outcome-segment" style="background: rgba(100,100,100,0.3); width: {pct}%;">'
             f"Pending: {remaining}"
