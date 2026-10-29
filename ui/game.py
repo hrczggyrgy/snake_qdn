@@ -415,7 +415,9 @@ def render_outcome_summary(
             if reason in counts:
                 counts[reason] += 1
         completed = len(recent_terminations)
-        denominator = max(completed, 1)  # Avoid division by zero
+        if completed == 0:
+            return None
+        denominator = completed  # Use actual completed episodes in window
         source_label = f"last {completed}"
     elif termination_counts and sum(termination_counts.values()) > 0:
         counts = termination_counts
@@ -438,7 +440,7 @@ def render_outcome_summary(
         "victory": "Victory",
     }
 
-    # Build stacked bar segments
+    # Build stacked bar segments (proportions of completed episodes)
     segments = []
     for reason in ["wall", "self", "timeout", "victory"]:
         count = counts.get(reason, 0)
@@ -453,8 +455,9 @@ def render_outcome_summary(
     # Remaining (incomplete to fill window)
     remaining = max(0, window - completed)
     if remaining > 0:
-        # Use max(denominator, 1) to avoid division by zero, but show as proportion of window
-        pct = remaining / max(denominator, 1) * 100
+        # Show as proportion of completed episodes (not window) to avoid invalid proportions
+        prop_denominator = max(completed, 1)
+        pct = remaining / prop_denominator * 100
         segments.append(
             f'<div class="sqdn-outcome-segment" style="background: rgba(100,100,100,0.3); width: {pct}%;">'
             f"Pending: {remaining}"
@@ -485,13 +488,19 @@ def render_outcome_summary(
 
     legend_html = "".join(legend_items)
 
+    # Caption
+    if completed < window:
+        caption = f"{completed} of {window} episodes available"
+    else:
+        caption = f"Showing last {window} episodes"
+
     html = f"""
     <div class="sqdn-outcome-summary">
         <div class="sqdn-outcome-header">Recent Episode Outcomes ({source_label})</div>
         <div class="sqdn-outcome-bar">{bar_html}</div>
         <div class="sqdn-outcome-legend">{legend_html}</div>
         <div style="font-size: 0.75rem; color: var(--sqdn-text-muted); margin-top: 0.25rem;">
-            Completed: {completed} · Showing termination reasons for completed episodes
+            {caption}
         </div>
     </div>
     """

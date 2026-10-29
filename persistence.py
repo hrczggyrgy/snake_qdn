@@ -87,6 +87,26 @@ class TrainingState:
     episode_id: int = 0
     step_id: int = 0
     replay_warmed_up: bool = False
+    # Agent hyperparameters (for exact resume validation)
+    gamma: float = 0.99
+    tau: float = 0.005
+    epsilon_start: float = 1.0
+    epsilon_end: float = 0.01
+    epsilon_decay: float = 0.995
+    epsilon_decay_steps: int = 0
+    learning_starts: int = 1000
+    train_every: int = 1
+    gradient_steps: int = 1
+    # Internal agent state
+    transitions_since_train: int = 0
+    # Recent episode outcomes (for exact resume of termination order)
+    recent_terminations: list[str] | None = None
+    # Environment reward/rule settings
+    env_grid_size: int = 20
+    env_step_penalty: float = -0.01
+    env_food_reward: float = 10.0
+    env_death_penalty: float = -10.0
+    env_allow_tail_entry: bool = True
 
 
 def get_model_config(model: torch.nn.Module) -> ModelConfig:
@@ -244,6 +264,11 @@ def load_checkpoint(
             "termination_history": {"wall": 0, "self": 0, "timeout": 0, "victory": 0},
         }
 
+    # Reconstruct nested EnvironmentState if it was serialized as a dict
+    env_data = training_state_dict.get("environment_state")
+    if isinstance(env_data, dict):
+        training_state_dict["environment_state"] = EnvironmentState(**env_data)
+
     training_state = TrainingState(**training_state_dict)
 
     return training_state, saved_config
@@ -343,29 +368,23 @@ class CheckpointManager:
         # Capture RNG state
         rng_python, rng_numpy, rng_torch, rng_cuda = capture_rng_state()
 
-        # Capture replay buffer (bounded for checkpoint size)
+        # Capture replay buffer exactly (preserve physical layout, size, and position)
         if hasattr(self.agent.memory, 'states'):
-            # New compact ReplayMemory
-            size = self.agent.memory.size
-            max_memory_items = min(50000, size)
-            start_idx = (self.agent.memory.position - size) % self.agent.memory.capacity
-            memory_data = []
-            for i in range(max_memory_items):
-                idx = (start_idx + i) % self.agent.memory.capacity
-                memory_data.append((
-                    self.agent.memory.states[idx].copy(),
-                    int(self.agent.memory.actions[idx]),
-                    float(self.agent.memory.rewards[idx]),
-                    self.agent.memory.next_states[idx].copy(),
-                    bool(self.agent.memory.terminated[idx]),
-                    bool(self.agent.memory.truncated[idx]),
-                ))
+            # New compact ReplayMemory - save exact state
+            memory_data = {
+                'states': self.agent.memory.states[:self.agent.memory.size].copy(),
+                'actions': self.agent.memory.actions[:self.agent.memory.size].copy(),
+                'rewards': self.agent.memory.rewards[:self.agent.memory.size].copy(),
+                'next_states': self.agent.memory.next_states[:self.agent.memory.size].copy(),
+                'terminated': self.agent.memory.terminated[:self.agent.memory.size].copy(),
+                'truncated': self.agent.memory.truncated[:self.agent.memory.size].copy(),
+                'size': self.agent.memory.size,
+                'position': self.agent.memory.position,
+                'capacity': self.agent.memory.capacity,
+            }
         else:
-            # Old deque-based ReplayMemory
+            # Old deque-based ReplayMemory (backward compatibility)
             memory_data = list(self.agent.memory.memory)
-            max_memory_items = 50000
-            if len(memory_data) > max_memory_items:
-                memory_data = memory_data[-max_memory_items:]
 
         # Capture environment state if provided
         environment_state = None
@@ -406,6 +425,26 @@ class CheckpointManager:
             episode_id=episode_id,
             step_id=step_id,
             replay_warmed_up=replay_warmed_up,
+            # Agent hyperparameters
+            gamma=self.agent.gamma,
+            tau=self.agent.tau,
+            epsilon_start=self.agent.epsilon_start,
+            epsilon_end=self.agent.epsilon_end,
+            epsilon_decay=self.agent.epsilon_decay,
+            epsilon_decay_steps=self.agent.epsilon_decay_steps,
+            learning_starts=self.agent.learning_starts,
+            train_every=self.agent.train_every,
+            gradient_steps=self.agent.gradient_steps,
+            # Internal agent state
+            transitions_since_train=self.agent._transitions_since_train,
+            # Recent episode outcomes (for exact resume of termination order)
+            recent_terminations=list(self.agent.recent_terminations),
+            # Environment reward/rule settings (from env if available)
+            env_grid_size=env.grid_size if env is not None else 20,
+            env_step_penalty=env.step_penalty if env is not None else -0.01,
+            env_food_reward=env.food_reward if env is not None else 10.0,
+            env_death_penalty=env.death_penalty if env is not None else -10.0,
+            env_allow_tail_entry=env.allow_tail_entry if env is not None else True,
         )
 
         model_config = get_model_config(self.agent.model)
@@ -468,29 +507,72 @@ class CheckpointManager:
             "timeout": 0,
             "victory": 0,
         }
+        # Restore internal agent state
+        self.agent._transitions_since_train = getattr(training_state, 'transitions_since_train', 0)
+        # Restore recent terminations (exact order)
+        recent_terms = getattr(training_state, 'recent_terminations', None)
+        if recent_terms is not None:
+            self.agent.recent_terminations = deque(recent_terms, maxlen=50)
+        else:
+            # Fallback: reconstruct from lifetime counts (approximate)
+            self.agent.recent_terminations = deque(
+                [k for k, v in self.agent.termination_history.items() for _ in range(v)],
+                maxlen=50
+            )
 
-        # Restore recent_terminations from termination_history (last 50)
-        self.agent.recent_terminations = deque(
-            [k for k, v in self.agent.termination_history.items() for _ in range(v)],
-            maxlen=50
-        )
+        # Validate hyperparameters match (warn if not exact)
+        if abs(self.agent.gamma - training_state.gamma) > 1e-6:
+            print(f"Warning: gamma mismatch: checkpoint={training_state.gamma}, current={self.agent.gamma}")
+        if abs(self.agent.tau - training_state.tau) > 1e-6:
+            print(f"Warning: tau mismatch: checkpoint={training_state.tau}, current={self.agent.tau}")
+        if abs(self.agent.epsilon_start - training_state.epsilon_start) > 1e-6:
+            print(f"Warning: epsilon_start mismatch: checkpoint={training_state.epsilon_start}, current={self.agent.epsilon_start}")
+        if abs(self.agent.epsilon_end - training_state.epsilon_end) > 1e-6:
+            print(f"Warning: epsilon_end mismatch: checkpoint={training_state.epsilon_end}, current={self.agent.epsilon_end}")
+        if abs(self.agent.epsilon_decay - training_state.epsilon_decay) > 1e-6:
+            print(f"Warning: epsilon_decay mismatch: checkpoint={training_state.epsilon_decay}, current={self.agent.epsilon_decay}")
+        if self.agent.epsilon_decay_steps != training_state.epsilon_decay_steps:
+            print(f"Warning: epsilon_decay_steps mismatch: checkpoint={training_state.epsilon_decay_steps}, current={self.agent.epsilon_decay_steps}")
+        if self.agent.learning_starts != training_state.learning_starts:
+            print(f"Warning: learning_starts mismatch: checkpoint={training_state.learning_starts}, current={self.agent.learning_starts}")
+        if self.agent.train_every != training_state.train_every:
+            print(f"Warning: train_every mismatch: checkpoint={training_state.train_every}, current={self.agent.train_every}")
+        if self.agent.gradient_steps != training_state.gradient_steps:
+            print(f"Warning: gradient_steps mismatch: checkpoint={training_state.gradient_steps}, current={self.agent.gradient_steps}")
 
         # Restore replay buffer
-        # Handle both old deque format and new compact format
+        # Handle both old tuple format, new dict format, and deque format
         memory_data = training_state.memory
         if hasattr(self.agent.memory, 'states'):
             # New compact ReplayMemory
-            self.agent.memory.size = min(len(memory_data), self.agent.memory.capacity)
-            self.agent.memory.position = training_state.memory_position % self.agent.memory.capacity
-            
-            for i, transition in enumerate(memory_data[:self.agent.memory.size]):
-                state, action, reward, next_state, terminated, truncated = transition
-                self.agent.memory.states[i] = state
-                self.agent.memory.actions[i] = action
-                self.agent.memory.rewards[i] = reward
-                self.agent.memory.next_states[i] = next_state
-                self.agent.memory.terminated[i] = terminated
-                self.agent.memory.truncated[i] = truncated
+            if isinstance(memory_data, dict):
+                # New format: exact state with size, position, capacity
+                size = memory_data.get('size', 0)
+                position = memory_data.get('position', 0)
+                capacity = memory_data.get('capacity', self.agent.memory.capacity)
+                
+                self.agent.memory.size = min(size, self.agent.memory.capacity)
+                self.agent.memory.position = position % self.agent.memory.capacity
+                
+                # Restore arrays up to the saved size
+                for field in ['states', 'actions', 'rewards', 'next_states', 'terminated', 'truncated']:
+                    if field in memory_data:
+                        arr = memory_data[field]
+                        self.agent.memory.__dict__[field][:self.agent.memory.size] = arr[:self.agent.memory.size]
+            else:
+                # Old tuple format: list of (state, action, reward, next_state, terminated, truncated)
+                size = min(len(memory_data), self.agent.memory.capacity)
+                self.agent.memory.size = size
+                self.agent.memory.position = training_state.memory_position % self.agent.memory.capacity
+                
+                for i, transition in enumerate(memory_data[:size]):
+                    state, action, reward, next_state, terminated, truncated = transition
+                    self.agent.memory.states[i] = state
+                    self.agent.memory.actions[i] = action
+                    self.agent.memory.rewards[i] = reward
+                    self.agent.memory.next_states[i] = next_state
+                    self.agent.memory.terminated[i] = terminated
+                    self.agent.memory.truncated[i] = truncated
         else:
             # Old deque-based ReplayMemory (backward compatibility)
             self.agent.memory.memory = deque(memory_data, maxlen=self.agent.memory.capacity)
@@ -518,6 +600,21 @@ class CheckpointManager:
             env.game_over = env_state.game_over
             if env_state.rng_state_python is not None:
                 restore_env_rng_state(env, env_state.rng_state_python, env_state.rng_state_numpy)
+            
+            # Rebuild empty cells cache from restored snake
+            env._rebuild_empty_cells()
+            
+            # Validate environment settings match (warn if not)
+            if env.grid_size != training_state.env_grid_size:
+                print(f"Warning: env grid_size mismatch: checkpoint={training_state.env_grid_size}, current={env.grid_size}")
+            if abs(env.step_penalty - training_state.env_step_penalty) > 1e-6:
+                print(f"Warning: env step_penalty mismatch: checkpoint={training_state.env_step_penalty}, current={env.step_penalty}")
+            if abs(env.food_reward - training_state.env_food_reward) > 1e-6:
+                print(f"Warning: env food_reward mismatch: checkpoint={training_state.env_food_reward}, current={env.food_reward}")
+            if abs(env.death_penalty - training_state.env_death_penalty) > 1e-6:
+                print(f"Warning: env death_penalty mismatch: checkpoint={training_state.env_death_penalty}, current={env.death_penalty}")
+            if env.allow_tail_entry != training_state.env_allow_tail_entry:
+                print(f"Warning: env allow_tail_entry mismatch: checkpoint={training_state.env_allow_tail_entry}, current={env.allow_tail_entry}")
 
         return {
             "episode": training_state.episode,

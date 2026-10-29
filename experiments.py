@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
+import torch
 
 from agent import Agent
 from snake_env import SnakeGameAI
@@ -84,6 +85,9 @@ class ExperimentResult:
     eval_scores: list[int] = field(default_factory=list)
     eval_mean: float = 0.0
     eval_std: float = 0.0
+    # Final evaluation metrics (on final policy only)
+    final_eval_mean: float = 0.0
+    final_eval_std: float = 0.0
     # Resource usage
     peak_memory_mb: float | None = None
     # Status
@@ -122,6 +126,9 @@ class ExperimentRunner:
             print(f"Budget: {config.budget}")
             print(f"Seed: {config.seed}")
             print(f"{'='*60}")
+
+        # Apply seed for reproducibility
+        self._apply_seed(config.seed)
 
         # Create controller with fixed seed
         controller = TrainingController(
@@ -179,8 +186,8 @@ class ExperimentRunner:
         end_time = time.monotonic()
         wall_time = end_time - start_time
 
-        # Final evaluation
-        final_eval = self._evaluate(controller, eval_episodes * 2)
+        # Final evaluation (using a separate environment to not affect training state)
+        final_eval = self._evaluate_final(controller, eval_episodes * 2)
         eval_scores.append(final_eval)
 
         # Collect results
@@ -207,6 +214,9 @@ class ExperimentRunner:
             eval_scores=[e["mean_score"] for e in eval_scores],
             eval_mean=np.mean([e["mean_score"] for e in eval_scores]) if eval_scores else 0,
             eval_std=np.std([e["mean_score"] for e in eval_scores]) if eval_scores else 0,
+            # Final evaluation metrics (separate from history)
+            final_eval_mean=final_eval["mean_score"],
+            final_eval_std=final_eval["std_score"],
             completed=(stopped_reason == "budget_exhausted"),
             stopped_reason=stopped_reason,
         )
@@ -254,26 +264,92 @@ class ExperimentRunner:
             "min_score": np.min(scores),
             "scores": scores,
         }
+    
+    def _apply_seed(self, seed: int) -> None:
+        """Apply seed to all random number generators."""
+        import random
+        import torch
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    
+    def _evaluate_final(self, controller: TrainingController, n_episodes: int, max_steps_per_episode: int = 200) -> dict:
+        """Run final evaluation on a separate environment to not affect training state."""
+        # Create a fresh environment with the same config but separate RNG
+        eval_env = SnakeGameAI(
+            grid_size=controller.env_config.grid_size,
+            step_penalty=controller.env_config.step_penalty,
+            food_reward=controller.env_config.food_reward,
+            death_penalty=controller.env_config.death_penalty,
+            render_mode=controller.env_config.render_mode,
+            seed=None,  # Use separate RNG
+        )
+        
+        # Use the trained agent in evaluation mode (greedy)
+        agent = controller.agent
+        agent.model.eval()
+        
+        scores = []
+        for _ in range(n_episodes):
+            state, _ = eval_env.reset()
+            done = False
+            steps = 0
+            while not done and steps < max_steps_per_episode:
+                action = agent.get_action(state, training=False)
+                state, reward, terminated, truncated, info = eval_env.step(action)
+                done = terminated or truncated
+                steps += 1
+            scores.append(info["score"])
+        
+        agent.model.train()
+        eval_env.close()
+        
+        return {
+            "mean_score": np.mean(scores) if scores else 0.0,
+            "std_score": np.std(scores) if scores else 0.0,
+            "max_score": np.max(scores) if scores else 0,
+            "min_score": np.min(scores) if scores else 0,
+            "scores": scores,
+        }
 
     def _save_result(self, result: ExperimentResult, config: ExperimentConfig) -> None:
-        """Save experiment result to disk."""
-        result_dict = asdict(result)
-        result_dict["config"] = asdict(config)
-        result_dict["config"]["agent_config"] = asdict(config.agent_config)
-        result_dict["config"]["env_config"] = asdict(config.env_config)
-        result_dict["config"]["budget"] = asdict(config.budget)
+        """Save experiment result to disk using versioned envelope."""
+        envelope = {
+            "schema_version": 1,
+            "config": {
+                **asdict(config),
+                "agent_config": asdict(config.agent_config),
+                "env_config": asdict(config.env_config),
+                "budget": asdict(config.budget),
+            },
+            "result": asdict(result),
+        }
 
         filepath = self.output_dir / f"{result.experiment_id}.json"
         with open(filepath, "w") as f:
-            json.dump(result_dict, f, indent=2, default=str)
+            json.dump(envelope, f, indent=2, default=str)
 
     def load_results(self, pattern: str = "*.json") -> list[ExperimentResult]:
-        """Load experiment results from disk."""
+        """Load experiment results from disk (supports v1 envelope and legacy flat format)."""
         results = []
         for filepath in self.output_dir.glob(pattern):
             with open(filepath) as f:
                 data = json.load(f)
-                results.append(ExperimentResult(**data))
+            
+            # Handle versioned envelope format
+            if "schema_version" in data and "result" in data:
+                result_data = data["result"]
+            else:
+                # Legacy flat format (backward compatibility)
+                result_data = data
+            
+            # Filter out unexpected fields (e.g., "config" from legacy saves)
+            result_fields = {f.name for f in ExperimentResult.__dataclass_fields__.values()}
+            filtered_data = {k: v for k, v in result_data.items() if k in result_fields}
+            
+            results.append(ExperimentResult(**filtered_data))
         return results
 
     def compare_results(self, results: list[ExperimentResult]) -> None:
@@ -373,10 +449,26 @@ def get_smaller_model_experiment() -> ExperimentConfig:
 
 
 def get_step_epsilon_decay_experiment() -> ExperimentConfig:
-    """Experiment with step-based epsilon decay (config change needed in agent)."""
+    """Experiment with step-based epsilon decay over training transitions."""
     config = get_baseline_experiment()
     config.name = "step_epsilon_decay"
     config.description = "Epsilon decay by training transitions (not episodes)"
+    config.agent_config = AgentConfig(
+        hidden_size=256,
+        lr=0.001,
+        gamma=0.99,
+        epsilon_start=1.0,
+        epsilon_end=0.01,
+        epsilon_decay=0.995,  # Not used when epsilon_decay_steps > 0
+        memory_size=100_000,
+        batch_size=256,
+        tau=0.005,
+        dropout=0.1,
+        learning_starts=1000,
+        train_every=1,
+        gradient_steps=1,
+        epsilon_decay_steps=500_000,  # Decay over 500k training transitions
+    )
     config.tags = ["ablation", "epsilon_schedule"]
     return config
 
@@ -389,6 +481,7 @@ def run_ablation_suite(budget_transitions: int = 500_000) -> list[ExperimentResu
         get_baseline_experiment(),
         get_no_dropout_experiment(),
         get_smaller_model_experiment(),
+        get_step_epsilon_decay_experiment(),
     ]
 
     # Update budgets

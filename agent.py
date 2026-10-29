@@ -438,10 +438,10 @@ class Agent:
             replay_warmed_up=replay_warmed_up,
         )
 
-    def load_checkpoint(self, filepath: str) -> dict[str, Any]:
+    def load_checkpoint(self, filepath: str, env=None) -> dict[str, Any]:
         """Load agent checkpoint (backward compatible - loads training state)."""
         manager = CheckpointManager(self, self.trainer.device)
-        return manager.load_full(filepath, strict=False)  # type: ignore
+        return manager.load_full(filepath, strict=False, env=env)  # type: ignore
 
     def save_weights_only(self, filepath: str) -> None:
         """Save only model weights (for inference/deployment)."""
@@ -474,7 +474,6 @@ class Agent:
 
         Clears:
         - scores_history, mean_scores_history, epsilon_history, loss_history
-        - termination_history (lifetime totals)
         - recent_terminations (recent window)
 
         Preserves:
@@ -482,6 +481,7 @@ class Agent:
         - total_steps (lifetime transition count)
         - high_score (lifetime best)
         - epsilon (current exploration rate)
+        - termination_history (lifetime totals)
         - trainer.loss_history, trainer.training_step
         - replay memory
         """
@@ -489,16 +489,15 @@ class Agent:
         self.mean_scores_history = []
         self.epsilon_history = []
         self.loss_history = []
-        self.termination_history = {
-            "wall": 0,
-            "self": 0,
-            "timeout": 0,
-            "victory": 0,
-        }
         self.recent_terminations.clear()
         # Note: n_games, total_steps, high_score, epsilon are NOT reset
+        # Note: termination_history is NOT reset
         # Note: trainer.loss_history and trainer.training_step are NOT reset
         # Note: replay memory is NOT cleared
+
+    def reset_display_stats(self) -> None:
+        """Alias for reset_stats for clarity."""
+        self.reset_stats()
 
 
 def train_agent(

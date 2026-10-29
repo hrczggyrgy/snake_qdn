@@ -245,7 +245,9 @@ class SnakeGameAI:
             else:
                 # Remove tail and add it back to empty cells
                 tail = self.snake.pop()
-                self._empty_cells.append(tail)
+                # Don't add tail to empty_cells if it's the same as new_head (tail-entry move)
+                if tail != new_head:
+                    self._empty_cells.append(tail)
 
             # Truncation: too many steps without food (time limit)
             if self.steps_since_food >= self.max_steps_without_food:
@@ -345,6 +347,11 @@ class SnakeGameAI:
         if x < 0 or x >= self.grid_size or y < 0 or y >= self.grid_size:
             return True
         if pos in self.snake:
+            # Allow entering the tail cell if it will move away (snake not growing)
+            tail = self.snake[-1]
+            will_grow = (self.food is not None and pos == self.food)
+            if self.allow_tail_entry and pos == tail and not will_grow:
+                return False
             return True
         return False
 

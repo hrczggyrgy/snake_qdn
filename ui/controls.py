@@ -48,21 +48,26 @@ def render_primary_toolbar(controller: TrainingController) -> None:
 
         with policy_col:
             if controller.mode != ActivityMode.MANUAL:
-                policy_options = ["Watch", "Train fast"]
+                # Internal policy values (must match TrainingController.advance_tick expectations)
+                POLICY_VALUES = ["Watch", "FastTraining"]
+                # Display labels for UI
+                POLICY_LABELS = ["Watch", "Train fast"]
+                
                 current_policy = st.session_state.get("execution_policy", "Watch")
                 try:
-                    policy_index = policy_options.index(current_policy)
+                    policy_index = POLICY_VALUES.index(current_policy)
                 except ValueError:
                     policy_index = 0
 
                 new_policy = st.selectbox(
                     "Execution",
-                    policy_options,
+                    POLICY_LABELS,
                     index=policy_index,
                     key="toolbar_policy",
                     help="Watch: Deliberately paced, readable movement\nTrain fast: Multiple transitions per UI update",
                 )
-                st.session_state.execution_policy = new_policy
+                # Map display label back to internal value
+                st.session_state.execution_policy = POLICY_VALUES[POLICY_LABELS.index(new_policy)]
             else:
                 st.selectbox("Execution", ["Manual"], disabled=True, key="toolbar_policy_manual")
 
@@ -82,10 +87,10 @@ def render_primary_toolbar(controller: TrainingController) -> None:
                         speed_options,
                         index=speed_index,
                         key="toolbar_speed",
-                        help="Slow: 0.1s/step\nNormal: 0.05s/step\nFast: 0.01s/step",
+                        help="Slow: 0.1s/step\nNormal: 0.05s/step\nFast: 0.05s/step (minimum)",
                     )
                     st.session_state.speed_preset = new_speed
-                    st.session_state.speed = {"Slow": 0.1, "Normal": 0.05, "Fast": 0.01}[new_speed]
+                    st.session_state.speed = {"Slow": 0.1, "Normal": 0.05, "Fast": 0.05}[new_speed]
                 else:
                     st.session_state.speed = 0.0
                     st.selectbox("Speed", ["N/A (burst)"], disabled=True, key="toolbar_speed_burst")

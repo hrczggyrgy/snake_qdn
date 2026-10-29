@@ -704,6 +704,24 @@ def render_termination_summary(
             if reason in counts:
                 counts[reason] += 1
         completed = len(recent_terminations)
+        if completed == 0:
+            # No completed episodes - return empty state figure
+            fig = go.Figure()
+            fig.add_annotation(
+                x=0.5, y=0.5, xref="paper", yref="paper",
+                text="No episodes completed yet",
+                showarrow=False, font={"size": 11, "color": "rgba(128,128,128,0.8)"}
+            )
+            fig.update_layout(
+                title={"text": "Episode Outcomes (none completed)", "font": {"size": 11}},
+                barmode="stack",
+                xaxis={"range": [0, 1], "showgrid": False, "showticklabels": False, "zeroline": False},
+                yaxis={"showgrid": False, "showticklabels": False},
+                height=80,
+                margin={"l": 10, "r": 10, "t": 30, "b": 10},
+            )
+            fig = apply_template(fig, height=80, uirevision="snake-termination")
+            return fig
         denominator = completed  # Use actual completed episodes in window
         source_label = f"last {completed}"
     elif termination_counts and sum(termination_counts.values()) > 0:
@@ -713,7 +731,23 @@ def render_termination_summary(
         denominator = max(completed, window) if completed >= window else completed
         source_label = f"lifetime ({completed})"
     else:
-        return None
+        # No data at all - return empty state figure
+        fig = go.Figure()
+        fig.add_annotation(
+            x=0.5, y=0.5, xref="paper", yref="paper",
+            text="No episodes completed yet",
+            showarrow=False, font={"size": 11, "color": "rgba(128,128,128,0.8)"}
+        )
+        fig.update_layout(
+            title={"text": "Episode Outcomes (none completed)", "font": {"size": 11}},
+            barmode="stack",
+            xaxis={"range": [0, 1], "showgrid": False, "showticklabels": False, "zeroline": False},
+            yaxis={"showgrid": False, "showticklabels": False},
+            height=80,
+            margin={"l": 10, "r": 10, "t": 30, "b": 10},
+        )
+        fig = apply_template(fig, height=80, uirevision="snake-termination")
+        return fig
 
     # Color mapping
     colors = {
@@ -758,9 +792,12 @@ def render_termination_summary(
     # Add remaining (incomplete to fill window) as transparent
     remaining = window - completed
     if remaining > 0:
+        # Show as proportion of completed episodes (not window) to avoid invalid proportions
+        # Use max(completed, 1) to avoid division by zero
+        prop_denominator = max(completed, 1)
         fig.add_trace(
             go.Bar(
-                x=[remaining / denominator],
+                x=[remaining / prop_denominator],
                 y=["Outcomes"],
                 orientation="h",
                 name="Pending",
@@ -773,6 +810,12 @@ def render_termination_summary(
             )
         )
 
+    # Add annotation for available episodes info
+    if completed < window:
+        annotation_text = f"{completed} of {window} episodes available"
+    else:
+        annotation_text = f"Showing last {window} episodes"
+    
     fig.update_layout(
         title={
             "text": f"Episode Outcomes ({source_label})",
@@ -784,7 +827,7 @@ def render_termination_summary(
             "showgrid": False,
             "showticklabels": False,
             "zeroline": False,
-            "title": "Proportion of Window",
+            "title": "Proportion of Completed Episodes",
         },
         yaxis={"showgrid": False, "showticklabels": False},
         legend={
@@ -797,6 +840,19 @@ def render_termination_summary(
         },
         height=80,
         margin={"l": 10, "r": 10, "t": 30, "b": 10},
+        annotations=[
+            {
+                "x": 0.5,
+                "y": -0.25,
+                "xref": "paper",
+                "yref": "paper",
+                "text": annotation_text,
+                "showarrow": False,
+                "font": {"size": 9, "color": "rgba(128,128,128,0.8)"},
+                "xanchor": "center",
+                "yanchor": "top",
+            }
+        ],
     )
 
     # Apply template FIRST (base layout)
@@ -936,7 +992,7 @@ def render_bellman_update(details: dict | None) -> go.Figure | None:
     action_names = ["Straight", "Right", "Left"]
     fig.add_annotation(
         x=0.98, y=0.98, xref="paper", yref="paper",
-        text=f"Action taken: {action_names[action]} ({action})<br>Greedy action: {action_names[greedy_action]} ({greedy_action})<br>Reward: {reward:.2f}<br>Terminated: {terminated}",
+        text=f"Action taken: {action_names[action]} ({action})<br>Target-network greedy action at s': {action_names[greedy_action]} ({greedy_action})<br>Reward: {reward:.2f}<br>Terminated: {terminated}",
         showarrow=False, font={"size": 10, "color": "white"},
         xanchor="right", yanchor="top",
         bgcolor="rgba(0,0,0,0.7)", bordercolor="#4488ff", borderwidth=1, borderpad=6,

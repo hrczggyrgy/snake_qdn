@@ -114,10 +114,10 @@ def test_auto_episode_continuation_fast_training():
     assert controller.training_episodes == episode_before + 1
     assert controller.paused is False
 
-    # Next burst should restart and continue
+    # Next burst should restart and continue (use 1 step to avoid completing another episode)
     snapshot2 = controller.advance_tick(
         execution_policy="FastTraining",
-        max_burst_steps=20,
+        max_burst_steps=1,
         burst_time_budget=0.1,
     )
     assert snapshot2.game_over is False

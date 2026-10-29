@@ -398,7 +398,8 @@ class TrainingController:
     @property
     def evaluation_episodes(self) -> int:
         """Completed evaluation episodes (no learning)."""
-        return self._episode_id - (self.agent.n_games if self._agent else 0)
+        train_eps = self.agent.n_games if self._agent else 0
+        return max(0, self._episode_id - train_eps)
 
     @property
     def total_env_steps(self) -> int:
@@ -598,7 +599,7 @@ class TrainingController:
         """
         with self._lock:
             if self._agent:
-                self._agent.reset_stats()
+                self._agent.reset_display_stats()
             # Reset display-scoped counters only
             self._episode_id = 0
             self._step_id = 0
@@ -607,6 +608,27 @@ class TrainingController:
                 EventType.HISTORY_CLEAR,
                 "Display history cleared (training state preserved)",
             )
+
+    def _reset_metrics(self) -> None:
+        """Reset all run-scoped metrics."""
+        self._metrics = {
+            "env_transitions": 0,
+            "training_transitions": 0,
+            "optimizer_updates": 0,
+            "episodes_completed": 0,
+            "total_session_time": 0.0,
+            "active_execution_time": 0.0,
+            "replay_buffer_size": 0,
+            "replay_active": False,
+            "time_action_selection": 0.0,
+            "time_env_step": 0.0,
+            "time_optimization": 0.0,
+            "time_diagnostics": 0.0,
+            "time_display_prep": 0.0,
+            "session_start_time": None,
+            "last_transition_time": None,
+            "_prev_optimizer_step": 0,
+        }
 
     def new_run(self) -> None:
         """Create fresh agent and replay buffer, discard current model."""
@@ -617,6 +639,7 @@ class TrainingController:
             self._episode_id = 0
             self._step_id = 0
             self._replay_warmed_up = False
+            self._reset_metrics()
             self.clear_events()
             self._reset_episode()
             self._emit_event(
@@ -634,6 +657,7 @@ class TrainingController:
             self._episode_id = 0
             self._step_id = 0
             self._replay_warmed_up = False
+            self._reset_metrics()
             self.clear_events()
             self._reset_episode()
             self._emit_event(
@@ -646,6 +670,7 @@ class TrainingController:
         with self._lock:
             self.agent_config = config
             self._agent = self._create_agent()
+            self._reset_metrics()
             self._reset_episode()
             self.clear_events()
             self._emit_event(
@@ -687,6 +712,9 @@ class TrainingController:
         if self._metrics["session_start_time"] is None:
             self._metrics["session_start_time"] = now
             self._metrics["last_transition_time"] = now
+
+        # Measure active execution time around the actual step execution
+        step_start = time.monotonic()
 
         # --- Get action (pre-step) ---
         t_action_start = time.monotonic()
@@ -745,11 +773,24 @@ class TrainingController:
         # --- Learning (only in TRAIN mode) ---
         replay_loss = None
         if self._mode == ActivityMode.TRAIN and self._agent is not None:
-            t_opt_start = time.monotonic()
-            optimizer_steps_before = self._agent.trainer.training_step
             # Store transition (terminated controls bootstrap, truncated stored separately)
             assert self._observation is not None, "Observation should be set before training"
             self._agent.remember(self._observation, action, reward, next_obs, terminated, truncated)
+            
+            # Track training transitions (one per stored transition, not per gradient step)
+            self._metrics["training_transitions"] = (
+                self._metrics.get("training_transitions") or 0
+            ) + 1
+            
+            # Update step-based epsilon decay immediately after storing transition
+            if self._agent.epsilon_decay_steps > 0:
+                self._agent.decay_epsilon_by_steps(
+                    self._metrics["training_transitions"],
+                    self._agent.epsilon_decay_steps
+                )
+            
+            t_opt_start = time.monotonic()
+            optimizer_steps_before = self._agent.trainer.training_step
             # Unified optimization step (replaces dual-update loop)
             losses = self._agent.maybe_optimize()
             self._metrics["time_optimization"] = (
@@ -777,12 +818,8 @@ class TrainingController:
                     "Replay buffer ready — replay training active",
                 )
 
-            # Track training transitions and losses
+            # Track losses
             if losses:
-                self._metrics["training_transitions"] = (
-                    self._metrics.get("training_transitions") or 0
-                ) + len(losses)
-                # Use last loss for event/stat purposes
                 replay_loss = losses[-1]
             else:
                 replay_loss = None
@@ -815,14 +852,12 @@ class TrainingController:
         # Update timing metrics
         session_start = self._metrics.get("session_start_time")
         if session_start is not None:
-            self._metrics["total_session_time"] = now - session_start
-            # Active execution time: accumulate time between transitions
-            last_transition = self._metrics.get("last_transition_time")
-            if last_transition is not None:
-                self._metrics["active_execution_time"] = (
-                    (self._metrics.get("active_execution_time") or 0.0) + now - last_transition
-                )
-            self._metrics["last_transition_time"] = now
+            self._metrics["total_session_time"] = time.monotonic() - session_start
+            # Active execution time: accumulate actual step execution time
+            self._metrics["active_execution_time"] = (
+                (self._metrics.get("active_execution_time") or 0.0) + time.monotonic() - step_start
+            )
+            self._metrics["last_transition_time"] = time.monotonic()
         else:
             self._metrics["total_session_time"] = 0.0
             self._metrics["active_execution_time"] = 0.0
@@ -1030,12 +1065,8 @@ class TrainingController:
             # Update agent's authoritative stats
             self._agent.update_stats(score, replay_loss, termination_reason)
             # Decay epsilon: use step-based if configured, else per-episode
-            if self._agent.epsilon_decay_steps > 0:
-                self._agent.decay_epsilon_by_steps(
-                    self._agent.trainer.training_step,
-                    self._agent.epsilon_decay_steps
-                )
-            else:
+            # Step-based decay is now applied per-transition in _step_impl
+            if self._agent.epsilon_decay_steps == 0:
                 self._agent.decay_epsilon()
 
             self._episode_id += 1
@@ -1147,8 +1178,8 @@ class TrainingController:
         """
         Load agent checkpoint transactionally with full state restore.
 
-        Loads into a candidate agent first, validates architecture and optimizer state,
-        then atomically replaces the live agent. If validation fails, the live agent
+        Loads into a candidate agent and candidate environment first, validates both,
+        then atomically replaces the live pair. If validation fails, the live pair
         is unchanged. Also restores environment and controller state.
 
         Returns:
@@ -1166,12 +1197,13 @@ class TrainingController:
                     "Manual recovery required (new_run or load_checkpoint)."
                 )
 
-            # Create candidate agent
+            # Create candidate agent AND candidate environment for validation
             candidate_agent = self._create_agent()
+            candidate_env = self._create_env()
 
             # Load checkpoint into candidate with environment
             try:
-                info: dict[str, Any] = candidate_agent.load_checkpoint(filepath)
+                info: dict[str, Any] = candidate_agent.load_checkpoint(filepath, env=candidate_env)
             except Exception as e:
                 raise ValueError(f"Failed to load checkpoint: {e}") from e
 
@@ -1186,8 +1218,9 @@ class TrainingController:
             # Validate optimizer state (Adam must have exp_avg and exp_avg_sq for all params)
             self._validate_optimizer_state(candidate_agent)
 
-            # All validations passed - atomically swap
+            # All validations passed - atomically swap both agent and environment
             self._agent = candidate_agent
+            self._env = candidate_env
             # Sync internal counters from checkpoint info
             self._run_id = info.get("run_id", self._run_id)
             self._episode_id = info.get("episode_id", self._agent.n_games)
