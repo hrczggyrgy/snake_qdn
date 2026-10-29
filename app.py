@@ -144,6 +144,9 @@ def init_ui_state():
         "show_grid": True,
         "max_burst_steps": 50,
         "burst_time_budget": 0.05,
+        # Controller state mirrors
+        "training": False,
+        "paused": True,
         # Event tracking
         "last_event_id": 0,
         "pending_events": [],
@@ -416,14 +419,20 @@ def render_game_grid(snapshot: TrainingSnapshot, show_grid: bool = True):
             "showgrid": False,
             "zeroline": False,
             "showticklabels": False,
+            "autorange": False,
+            "fixedrange": True,
+            "constrain": "domain",
         },
         yaxis={
-            "range": [0, grid_size],
+            "range": [grid_size, 0],
             "showgrid": False,
             "zeroline": False,
             "showticklabels": False,
             "scaleanchor": "x",
             "scaleratio": 1,
+            "autorange": False,
+            "fixedrange": True,
+            "constrain": "domain",
         },
         width=380,
         height=380,
@@ -432,8 +441,8 @@ def render_game_grid(snapshot: TrainingSnapshot, show_grid: bool = True):
         paper_bgcolor="#1e1e2e",
         font={"color": "white"},
         showlegend=False,
+        autosize=False,
     )
-    fig.update_yaxes(autorange="reversed")
     return fig
 
 
@@ -473,16 +482,17 @@ def render_decision_strip(snapshot: TrainingSnapshot):
     )
 
     html = f"""
-    <div class="decision-strip" style="border-left: 3px solid {color};">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
+    <div class="decision-strip" style="border-left: 3px solid {color}; box-sizing: border-box; width: 100%; min-width: 0; overflow-wrap: anywhere;">
+        <div class="decision-strip-row" style="display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; align-items: center;">
+            <div style="min-width: 0;">
                 <span style="color: {color}; font-weight: 600;">{label}</span>
                 <span style="color: #aaa; margin-left: 0.5rem;">{detail}</span>
             </div>
-            <div style="color: #888; font-size: 0.8rem;">
+            <div style="color: #888; font-size: 0.8rem; min-width: 0;">
                 Q: {q_parts}
             </div>
         </div>
+    </div>
     """
     return html
 
@@ -533,6 +543,7 @@ def render_outcome_summary(snapshot: TrainingSnapshot):
             <span style="background: #333; padding: 0.15rem 0.5rem; border-radius: 4px;">Max: {max_score}</span>
             <span style="background: #333; padding: 0.15rem 0.5rem; border-radius: 4px;">Count: {len(recent_scores)}</span>
         </div>
+    </div>
     """
     return html
 
@@ -1288,10 +1299,18 @@ def main():
         snap = ctl.get_snapshot()
         if snap.game_state:
             fig = render_game_grid(snap, show_grid=st.session_state.get("show_grid", True))
+            board_size = 380
+            fig.update_layout(
+                width=board_size,
+                height=board_size,
+                autosize=False,
+                margin={"l": 5, "r": 5, "t": 5, "b": 5},
+            )
             st.plotly_chart(
                 fig,
-                width="stretch",
-                config={"displayModeBar": False, "staticPlot": True},
+                width=board_size,
+                height=board_size,
+                config={"displayModeBar": False, "staticPlot": True, "responsive": False},
                 key="live_game_canvas",
             )
 
