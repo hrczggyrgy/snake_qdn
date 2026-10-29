@@ -37,17 +37,21 @@ def test_auto_episode_continuation_watch_mode():
         snapshot = controller.advance_tick(execution_policy="Watch")
         if snapshot.game_over and controller.episode > episode_before:
             episode_ended = True
-            print(f"  Episode ended at step {i+1}")
+            print(f"  Episode ended at step {i + 1}")
             break
 
     assert episode_ended, "Episode did not end within max steps"
-    assert controller.episode == episode_before + 1, f"Episode count: {controller.episode} != {episode_before + 1}"
+    assert controller.episode == episode_before + 1, (
+        f"Episode count: {controller.episode} != {episode_before + 1}"
+    )
     assert controller.paused is False, "Controller should not be paused after episode end"
 
     # Next tick should restart board and advance
     snapshot2 = controller.advance_tick(execution_policy="Watch")
     assert snapshot2.game_over is False, "Board should be active after restart"
-    assert controller.episode == episode_before + 1, "Episode count should not increase during reset"
+    assert controller.episode == episode_before + 1, (
+        "Episode count should not increase during reset"
+    )
 
     # Verify same agent and replay buffer
     assert id(controller._agent) == agent_id_before, "Agent should be same object"
@@ -55,10 +59,11 @@ def test_auto_episode_continuation_watch_mode():
 
     # Verify epsilon decayed exactly once (not during reset)
     assert controller.epsilon < epsilon_before, "Epsilon should have decayed"
-    expected_epsilon = max(controller.agent_config.epsilon_end, epsilon_before * controller.agent_config.epsilon_decay)
+    expected_epsilon = max(
+        controller.agent_config.epsilon_end, epsilon_before * controller.agent_config.epsilon_decay
+    )
     assert abs(controller.epsilon - expected_epsilon) < 1e-6, (
-        f"Epsilon should decay exactly once per episode: "
-        f"{controller.epsilon} != {expected_epsilon}"
+        f"Epsilon should decay exactly once per episode: {controller.epsilon} != {expected_epsilon}"
     )
 
     print(f"  Episode count: {controller.episode}")
@@ -101,7 +106,7 @@ def test_auto_episode_continuation_fast_training():
         )
         if controller.episode > episode_before:
             episode_ended = True
-            print(f"  Episode ended at burst {burst+1}")
+            print(f"  Episode ended at burst {burst + 1}")
             break
 
     assert episode_ended, "Episode did not end within max bursts"
@@ -121,7 +126,9 @@ def test_auto_episode_continuation_fast_training():
     # Verify same agent and epsilon decayed once
     assert id(controller._agent) == agent_id_before
     assert controller.epsilon < epsilon_before
-    expected_epsilon = max(controller.agent_config.epsilon_end, epsilon_before * controller.agent_config.epsilon_decay)
+    expected_epsilon = max(
+        controller.agent_config.epsilon_end, epsilon_before * controller.agent_config.epsilon_decay
+    )
     assert abs(controller.epsilon - expected_epsilon) < 1e-6
 
     print(f"  Episode count: {controller.episode}")

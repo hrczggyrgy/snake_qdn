@@ -42,6 +42,8 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint]
 select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
@@ -58,14 +60,7 @@ ignore = [
     "T201",  # print statements allowed in tests and scripts
     "N802",  # function name should be lowercase (some test functions)
 ]
-
-[tool.ruff.per-file-ignores]
-"test_*.py" = ["T201", "N802", "S101"]
-"app.py" = ["T201"]
-"model.py" = ["N812", "N801"]
-
-[tool.ruff.lint]
-# Exclude generated files
+per-file-ignores = { "test_*.py" = ["T201", "N802", "S101"], "app.py" = ["T201"], "model.py" = ["N812", "N801"] }
 exclude = [
     ".git",
     "__pycache__",
@@ -91,3 +86,8 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
 ignore_missing_imports = true
+exclude = [
+    ".*[/\\\\]site-packages[/\\\\].*",
+    ".*[/\\\\].local[/\\\\].*",
+]
+follow_imports = "skip"

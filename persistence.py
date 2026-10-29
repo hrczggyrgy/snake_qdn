@@ -340,7 +340,12 @@ class CheckpointManager:
         self.agent.mean_scores_history = training_state.mean_scores_history
         self.agent.epsilon_history = training_state.epsilon_history
         self.agent.trainer.loss_history = training_state.loss_history
-        self.agent.termination_history = training_state.termination_history or {"wall": 0, "self": 0, "timeout": 0, "victory": 0}
+        self.agent.termination_history = training_state.termination_history or {
+            "wall": 0,
+            "self": 0,
+            "timeout": 0,
+            "victory": 0,
+        }
 
         # Restore replay buffer
         self.agent.memory.memory = deque(training_state.memory, maxlen=self.agent.memory.capacity)
@@ -395,28 +400,28 @@ if __name__ == "__main__":
     print("Testing persistence module...")
 
     agent = Agent(hidden_size=128)
-    agent.n_games = 42
-    agent.high_score = 15
-    agent.epsilon = 0.3
+    agent.n_games = 42  # type: ignore
+    agent.high_score = 15  # type: ignore
+    agent.epsilon = 0.3  # type: ignore
 
     with tempfile.TemporaryDirectory() as tmpdir:
         path = os.path.join(tmpdir, "test_checkpoint.pth")
 
         # Test full save/load
-        manager = CheckpointManager(agent, agent.trainer.device)
+        manager = CheckpointManager(agent, agent.trainer.device)  # type: ignore
         manager.save_full(path)
         print("  ✓ Full checkpoint saved")
 
         # Create new agent and load
         new_agent = Agent(hidden_size=128)
-        new_manager = CheckpointManager(new_agent, new_agent.trainer.device)
+        new_manager = CheckpointManager(new_agent, new_agent.trainer.device)  # type: ignore
         info = new_manager.load_full(path)
         print(f"  ✓ Full checkpoint loaded: {info}")
 
         # Verify state restored
-        assert new_agent.n_games == 42
-        assert new_agent.high_score == 15
-        assert abs(new_agent.epsilon - 0.3) < 0.01
+        assert new_agent.n_games == 42  # type: ignore
+        assert new_agent.high_score == 15  # type: ignore
+        assert abs(new_agent.epsilon - 0.3) < 0.01  # type: ignore
         print("  ✓ Agent state restored")
 
         # Verify Q-values match
@@ -432,7 +437,7 @@ if __name__ == "__main__":
         print("  ✓ Weights-only saved")
 
         inference_agent = Agent(hidden_size=128)
-        inf_manager = CheckpointManager(inference_agent, inference_agent.trainer.device)
+        inf_manager = CheckpointManager(inference_agent, inference_agent.trainer.device)  # type: ignore
         inf_manager.load_weights_only(weights_path)
         print("  ✓ Weights-only loaded")
 

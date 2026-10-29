@@ -151,7 +151,7 @@ class QTrainer:
 
         # Training stats
         self.training_step = 0
-        self.loss_history = []
+        self.loss_history: list[float] = []
 
     def soft_update_target(self) -> None:
         """Soft update target network parameters."""
@@ -221,7 +221,7 @@ class QTrainer:
         self.soft_update_target()
 
         self.training_step += 1
-        loss_val = loss.item()
+        loss_val: float = loss.item()
         self.loss_history.append(loss_val)
 
         return loss_val
@@ -231,16 +231,18 @@ class QTrainer:
         self.model.eval()
         with torch.no_grad():
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            q_values = self.model(state_tensor)
-            return q_values.cpu().numpy().squeeze()
+            q_values: torch.Tensor = self.model(state_tensor)
+            result: np.ndarray = q_values.cpu().numpy().squeeze()
+            return result.astype(np.float32)
 
     def get_action_probabilities(self, state: np.ndarray, temperature: float = 1.0) -> np.ndarray:
         """Get action probabilities using softmax over Q-values."""
         q_values = self.get_q_values(state)
         # Apply temperature
         scaled_q = q_values / temperature
-        probs = F.softmax(torch.FloatTensor(scaled_q), dim=0).numpy()
-        return probs
+        probs_t: torch.Tensor = F.softmax(torch.FloatTensor(scaled_q), dim=0)
+        probs: np.ndarray = probs_t.numpy()
+        return probs.astype(np.float32)
 
     @staticmethod
     def probabilities_from_q_values(q_values: np.ndarray, temperature: float = 1.0) -> np.ndarray:
@@ -255,8 +257,9 @@ class QTrainer:
         """
         scaled_q = np.asarray(q_values, dtype=np.float64) / temperature
         scaled_q -= scaled_q.max()  # Numerical stability
-        weights = np.exp(scaled_q)
-        return weights / weights.sum()
+        weights: np.ndarray = np.exp(scaled_q)
+        result: np.ndarray = weights / weights.sum()
+        return result.astype(np.float32)
 
     def save_checkpoint(
         self, file_path: str, episode: int, epsilon: float, high_score: int, avg_score: float

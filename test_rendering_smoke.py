@@ -22,9 +22,10 @@ def main():
     # Verify old fragmented chart functions are gone (top-level fragment definitions)
     source = Path("app.py").read_text()
     assert "live_charts_area" not in source, "Old live_charts_area should be removed"
-    # live_game_area exists but is now created by a factory function, not a top-level @st.fragment
-    # Check that the old pattern of @st.fragment on live_game_area is gone
-    assert "@st.fragment" not in source or source.count("@st.fragment") <= 2, "Should have at most 2 fragments (game board + charts)"
+    # Current architecture has 3 fragments: execution (game board), metrics, inspect_learning
+    assert source.count("@st.fragment") == 3, (
+        f"Should have exactly 3 fragments (execution, metrics, inspect), found {source.count('@st.fragment')}"
+    )
     assert "_loss_slot" not in source
     assert "_epsilon_slot" not in source
     assert "chart_versions" not in source

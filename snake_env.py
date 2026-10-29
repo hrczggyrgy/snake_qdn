@@ -3,6 +3,8 @@ Snake Environment following Gymnasium API conventions.
 
 This module implements a discrete grid-based Snake game environment
 with an 11-dimensional observation space and 3 discrete actions.
+
+Uses instance-local random generators for RNG isolation.
 """
 
 import random
@@ -47,6 +49,10 @@ class SnakeGameAI:
         self.death_penalty = death_penalty
         self.render_mode = render_mode
 
+        # Instance-local random generators for RNG isolation
+        self._rng = random.Random()
+        self._np_rng = np.random.default_rng()
+
         if seed is not None:
             self.seed(seed)
 
@@ -68,13 +74,16 @@ class SnakeGameAI:
         self.cell_size = 20
         self.window_size = self.grid_size * self.cell_size
 
+        # food can be None when board is full (victory)
+        self.food: tuple[int, int] | None = None
+
         self.reset()
 
     def seed(self, seed: int) -> None:
-        """Set random seed for reproducibility."""
+        """Set random seed for reproducibility (instance-local)."""
         self._seed = seed
-        random.seed(seed)
-        np.random.seed(seed)
+        self._rng.seed(seed)
+        self._np_rng = np.random.default_rng(seed)
 
     def reset(
         self, seed: int | None = None, options: dict | None = None
@@ -110,7 +119,7 @@ class SnakeGameAI:
         return observation, info
 
     def _place_food(self) -> None:
-        """Place food at random empty position."""
+        """Place food at random empty position using instance-local RNG."""
         empty_cells = [
             (x, y)
             for x in range(self.grid_size)
@@ -118,7 +127,7 @@ class SnakeGameAI:
             if (x, y) not in self.snake
         ]
         if empty_cells:
-            self.food = random.choice(empty_cells)
+            self.food = self._rng.choice(empty_cells)
         else:
             # Board is full - snake has won (filled entire grid)
             # This is a terminal success state
@@ -260,7 +269,7 @@ class SnakeGameAI:
             food_up = 1.0 if self.food[1] < head[1] else 0.0
             food_down = 1.0 if self.food[1] > head[1] else 0.0
 
-        obs = np.array(
+        obs: np.ndarray = np.array(
             [
                 float(danger_straight),
                 float(danger_right),
@@ -308,7 +317,7 @@ class SnakeGameAI:
             return None
 
         # Create RGB image
-        img = np.zeros((self.window_size, self.window_size, 3), dtype=np.uint8)
+        img: np.ndarray = np.zeros((self.window_size, self.window_size, 3), dtype=np.uint8)
         cell = self.cell_size
 
         # Background

@@ -26,7 +26,7 @@ from ui.game import (
     render_metrics_row,
     render_outcome_summary,
 )
-from ui.inspection import render_inspect_learning, render_training_diagnostics
+from ui.inspection import render_training_diagnostics
 from ui.styles import BOARD_SIZE, inject_global_styles
 
 # Configure logging
@@ -68,7 +68,7 @@ def get_controller() -> TrainingController:
     """Get or create the TrainingController from session state."""
     if "controller" not in st.session_state:
         st.session_state.controller = TrainingController()
-    return st.session_state.controller
+    return st.session_state.controller  # type: ignore
 
 
 def init_ui_state():
@@ -97,17 +97,14 @@ init_ui_state()
 # =============================================================================
 def create_execution_fragment():
     """Create the execution fragment that owns advance_tick() and renders the game board.
-    
+
     This is the ONLY fragment that calls advance_tick(). It runs at game frequency
     (50ms Watch, 100ms FastTraining) and renders the game board, decision strip,
     latest event, and status badge.
     """
     controller = get_controller()
 
-    running = (
-        not controller.paused
-        and controller.mode != ActivityMode.MANUAL
-    )
+    running = not controller.paused and controller.mode != ActivityMode.MANUAL
 
     # For Watch mode, use a reasonable minimum interval (not 0)
     # FastTraining uses burst logic inside the fragment
@@ -223,7 +220,7 @@ def metrics_fragment():
 @st.fragment(run_every=0.5)
 def inspect_learning_fragment():
     """Render the Inspect Learning section at 500ms cadence (read-only).
-    
+
     Gets a fresh coherent snapshot on each refresh. Uses the retained
     last-decision record from the snapshot (pre-action data).
     """
@@ -236,6 +233,7 @@ def inspect_learning_fragment():
     # State Vector
     st.caption("State Representation (11D) — grouped by Danger / Direction / Food")
     from ui.charts import render_state_vector
+
     fig_sv = render_state_vector(snapshot.observation)
     if fig_sv:
         st.plotly_chart(
@@ -250,12 +248,16 @@ def inspect_learning_fragment():
 
     # Q-Values
     st.caption("Action Q-Values — ▲ Executed  ◆ Preferred (greedy)  Q-gap = top-two separation")
-    from ui.charts import render_q_values
     import numpy as np
+
+    from ui.charts import render_q_values
+
     fig_q = render_q_values(
         q_values=snapshot.q_values,
         action_executed=snapshot.action,
-        action_preferred=int(np.argmax(snapshot.q_values)) if snapshot.q_values is not None else None,
+        action_preferred=int(np.argmax(snapshot.q_values))
+        if snapshot.q_values is not None
+        else None,
         selection_reason=snapshot.selection_reason,
     )
     if fig_q:
@@ -273,6 +275,7 @@ def inspect_learning_fragment():
     if st.session_state.get("show_activations", False):
         st.caption("Network Activations — recomputed with current weights")
         from ui.charts import render_network_activations
+
         fig_net = render_network_activations(snapshot, controller)
         if fig_net:
             st.plotly_chart(
@@ -341,7 +344,7 @@ def main():
     st.markdown("---")
     render_training_diagnostics(controller, controller.get_snapshot())
 
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":

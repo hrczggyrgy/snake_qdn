@@ -35,7 +35,9 @@ def render_inspect_learning(
     st.caption("State Representation (11D) — grouped by Danger / Direction / Food")
     fig_sv = render_state_vector(snapshot.observation)
     if fig_sv:
-        st.plotly_chart(fig_sv, width="stretch", config={"displayModeBar": False}, key="inspect_state_vector")
+        st.plotly_chart(
+            fig_sv, width="stretch", config={"displayModeBar": False}, key="inspect_state_vector"
+        )
     else:
         st.info("No observation available")
 
@@ -44,11 +46,15 @@ def render_inspect_learning(
     fig_q = render_q_values(
         q_values=snapshot.q_values,
         action_executed=snapshot.action,
-        action_preferred=int(np.argmax(snapshot.q_values)) if snapshot.q_values is not None else None,
+        action_preferred=int(np.argmax(snapshot.q_values))
+        if snapshot.q_values is not None
+        else None,
         selection_reason=snapshot.selection_reason,
     )
     if fig_q:
-        st.plotly_chart(fig_q, width="stretch", config={"displayModeBar": False}, key="inspect_q_values")
+        st.plotly_chart(
+            fig_q, width="stretch", config={"displayModeBar": False}, key="inspect_q_values"
+        )
     else:
         st.info("No Q-values available")
 
@@ -57,7 +63,9 @@ def render_inspect_learning(
         st.caption("Network Activations — recomputed with current weights")
         fig_net = render_network_activations(snapshot, controller, model_revision)
         if fig_net:
-            st.plotly_chart(fig_net, width="stretch", config={"displayModeBar": False}, key="inspect_network")
+            st.plotly_chart(
+                fig_net, width="stretch", config={"displayModeBar": False}, key="inspect_network"
+            )
         else:
             st.info("Network activations unavailable")
     else:
@@ -83,6 +91,7 @@ def render_inspect_learning_simple(
 # Training Diagnostics
 # =============================================================================
 
+
 def render_training_diagnostics(controller: TrainingController, snapshot: TrainingSnapshot) -> None:
     """Render the lower Training Diagnostics area (collapsible)."""
     from ui.charts import (
@@ -103,20 +112,26 @@ def render_training_diagnostics(controller: TrainingController, snapshot: Traini
                 snapshot.recent_mean_scores,
                 snapshot.episode,
             )
-            st.plotly_chart(fig_score, width="stretch", config={"displayModeBar": False}, key="diag_scores")
+            st.plotly_chart(
+                fig_score, width="stretch", config={"displayModeBar": False}, key="diag_scores"
+            )
 
         with col2:
             fig_loss = render_loss_chart(
                 snapshot.recent_loss,
                 snapshot.optimizer_steps,
             )
-            st.plotly_chart(fig_loss, width="stretch", config={"displayModeBar": False}, key="diag_loss")
+            st.plotly_chart(
+                fig_loss, width="stretch", config={"displayModeBar": False}, key="diag_loss"
+            )
 
         # Row 2: Epsilon + Throughput
         col1, col2 = st.columns(2)
         with col1:
             fig_eps = render_epsilon_chart(snapshot.recent_epsilon, snapshot.episode)
-            st.plotly_chart(fig_eps, width="stretch", config={"displayModeBar": False}, key="diag_epsilon")
+            st.plotly_chart(
+                fig_eps, width="stretch", config={"displayModeBar": False}, key="diag_epsilon"
+            )
 
         with col2:
             # Throughput - placeholder for now, could be enhanced with history
@@ -127,7 +142,9 @@ def render_training_diagnostics(controller: TrainingController, snapshot: Traini
 
             if tps_history:
                 fig_tp = render_throughput_chart(tps_history, ops_history, steps_history)
-                st.plotly_chart(fig_tp, width="stretch", config={"displayModeBar": False}, key="diag_throughput")
+                st.plotly_chart(
+                    fig_tp, width="stretch", config={"displayModeBar": False}, key="diag_throughput"
+                )
             else:
                 # Show current metrics as static display
                 st.markdown("**Current Throughput**")
@@ -143,14 +160,21 @@ def render_training_diagnostics(controller: TrainingController, snapshot: Traini
             if term_counts:
                 fig_term = render_termination_summary(term_counts, window=50)
                 if fig_term:
-                    st.plotly_chart(fig_term, width="stretch", config={"displayModeBar": False}, key="diag_termination")
+                    st.plotly_chart(
+                        fig_term,
+                        width="stretch",
+                        config={"displayModeBar": False},
+                        key="diag_termination",
+                    )
 
         # Row 4: Event History (if available)
         if hasattr(st.session_state, "event_history") and st.session_state.event_history:
             with st.expander("📜 Event History", expanded=False):
                 for event in reversed(st.session_state.event_history[-50:]):
                     event_type = event.get("type", "info")
-                    icon = {"info": "ℹ️", "success": "✅", "warning": "⚠️", "error": "❌"}.get(event_type, "•")
+                    icon = {"info": "ℹ️", "success": "✅", "warning": "⚠️", "error": "❌"}.get(
+                        event_type, "•"
+                    )
                     st.caption(f"{icon} {event.get('message', '')}")
 
 
@@ -166,7 +190,9 @@ TERMINATION_REASON_MAP = {
 }
 
 
-def classify_termination(game_state: dict, terminated: bool, truncated: bool, info: dict) -> str | None:
+def classify_termination(
+    game_state: dict, terminated: bool, truncated: bool, info: dict
+) -> str | None:
     """Classify episode termination reason from environment info.
 
     Returns one of: 'wall', 'self', 'timeout', 'victory', or None if not terminal.

@@ -17,6 +17,7 @@ from ui.styles import (
 # Game Board (Plotly Coordinate Renderer)
 # =============================================================================
 
+
 def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.Figure:
     """Render the game board as a fixed-size Plotly figure from snapshot."""
     game_state = snapshot.game_state
@@ -28,8 +29,22 @@ def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.
             margin=BOARD_MARGIN,
             plot_bgcolor="#1e1e2e",
             paper_bgcolor="#1e1e2e",
-            xaxis={"showgrid": False, "zeroline": False, "showticklabels": False, "range": [0, 20], "fixedrange": True},
-            yaxis={"showgrid": False, "zeroline": False, "showticklabels": False, "range": [20, 0], "fixedrange": True, "scaleanchor": "x", "scaleratio": 1},
+            xaxis={
+                "showgrid": False,
+                "zeroline": False,
+                "showticklabels": False,
+                "range": [0, 20],
+                "fixedrange": True,
+            },
+            yaxis={
+                "showgrid": False,
+                "zeroline": False,
+                "showticklabels": False,
+                "range": [20, 0],
+                "fixedrange": True,
+                "scaleanchor": "x",
+                "scaleratio": 1,
+            },
         )
         return fig
 
@@ -46,12 +61,18 @@ def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.
         for i in range(grid_size + 1):
             fig.add_shape(
                 type="line",
-                x0=0, y0=i, x1=grid_size, y1=i,
+                x0=0,
+                y0=i,
+                x1=grid_size,
+                y1=i,
                 line={"color": "rgba(100,100,100,0.2)", "width": 0.5},
             )
             fig.add_shape(
                 type="line",
-                x0=i, y0=0, x1=i, y1=grid_size,
+                x0=i,
+                y0=0,
+                x1=i,
+                y1=grid_size,
                 line={"color": "rgba(100,100,100,0.2)", "width": 0.5},
             )
 
@@ -62,7 +83,10 @@ def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.
 
         fig.add_shape(
             type="rect",
-            x0=x, y0=y, x1=x + 1, y1=y + 1,
+            x0=x,
+            y0=y,
+            x1=x + 1,
+            y1=y + 1,
             fillcolor=color,
             opacity=opacity,
             line={"color": "#1a5c1a", "width": 1},
@@ -84,8 +108,10 @@ def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.
             for ex, ey in eyes:
                 fig.add_shape(
                     type="circle",
-                    x0=x + ex, y0=y + ey,
-                    x1=x + ex + eye_size, y1=y + ey + eye_size,
+                    x0=x + ex,
+                    y0=y + ey,
+                    x1=x + ex + eye_size,
+                    y1=y + ey + eye_size,
                     fillcolor="white",
                     line={"width": 0},
                     layer="above",
@@ -96,16 +122,20 @@ def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.
         fx, fy = food
         fig.add_shape(
             type="circle",
-            x0=fx + 0.1, y0=fy + 0.1,
-            x1=fx + 0.9, y1=fy + 0.9,
+            x0=fx + 0.1,
+            y0=fy + 0.1,
+            x1=fx + 0.9,
+            y1=fy + 0.9,
             fillcolor="#FF4444",
             line={"color": "#CC0000", "width": 2},
             layer="above",
         )
         fig.add_shape(
             type="circle",
-            x0=fx + 0.2, y0=fy + 0.2,
-            x1=fx + 0.4, y1=fy + 0.4,
+            x0=fx + 0.2,
+            y0=fy + 0.2,
+            x1=fx + 0.4,
+            y1=fy + 0.4,
             fillcolor="#FFAAAA",
             line={"width": 0},
             layer="above",
@@ -175,7 +205,9 @@ def render_game_board_fragment(controller, show_grid: bool, key: str = "live_gam
 
     # Status caption
     if controller.agent and snapshot.game_state:
-        mode_icon = {"train": "🧠", "evaluate": "📊", "manual": "👤"}.get(controller.mode.value, "❓")
+        mode_icon = {"train": "🧠", "evaluate": "📊", "manual": "👤"}.get(
+            controller.mode.value, "❓"
+        )
         status = "Running" if not controller.paused else "Paused"
         st.caption(
             f"{mode_icon} {controller.mode.value.title()} · {status} · "
@@ -189,6 +221,7 @@ def render_game_board_fragment(controller, show_grid: bool, key: str = "live_gam
 # =============================================================================
 # Decision Strip
 # =============================================================================
+
 
 def render_decision_strip(snapshot: TrainingSnapshot) -> str | None:
     """Render the compact 'Last decision' strip as HTML.
@@ -219,11 +252,7 @@ def render_decision_strip(snapshot: TrainingSnapshot) -> str | None:
         reason_class = "sqdn-reason-manual"
     elif reason == "exploiting":
         label = "🎯 Exploiting"
-        q_gap = (
-            abs(sorted(q_values)[-1] - sorted(q_values)[-2])
-            if len(q_values) >= 2
-            else 0
-        )
+        q_gap = abs(sorted(q_values)[-1] - sorted(q_values)[-2]) if len(q_values) >= 2 else 0
         detail = f"{action_name} = argmax Q (Q-gap: {q_gap:.3f})"
         color = "#44cc44"
         reason_class = "sqdn-reason-exploiting"
@@ -333,7 +362,7 @@ def render_event_feed(events: list[dict], max_events: int = 5) -> str | None:
     html_parts = ['<div class="sqdn-event-feed">']
     for event in events[-max_events:]:
         html_parts.append(format_event(event))
-    html_parts.append('</div>')
+    html_parts.append("</div>")
     return "\n".join(html_parts)
 
 
@@ -343,7 +372,16 @@ def render_latest_event(events: list[dict]) -> str | None:
         return None
 
     # Filter out low-priority events for the "latest" slot
-    priority_order = ["record", "episode_end", "replay", "food", "warning", "success", "info", "error"]
+    priority_order = [
+        "record",
+        "episode_end",
+        "replay",
+        "food",
+        "warning",
+        "success",
+        "info",
+        "error",
+    ]
     filtered = [e for e in events if e.get("type") in priority_order]
     if not filtered:
         filtered = events
@@ -355,6 +393,7 @@ def render_latest_event(events: list[dict]) -> str | None:
 # =============================================================================
 # Episode Outcome Summary (Horizontal Stacked Bar)
 # =============================================================================
+
 
 def render_outcome_summary(termination_counts: dict[str, int], window: int = 50) -> str | None:
     """Render horizontal stacked bar of recent episode outcomes.
@@ -390,8 +429,8 @@ def render_outcome_summary(termination_counts: dict[str, int], window: int = 50)
             pct = count / denominator * 100
             segments.append(
                 f'<div class="sqdn-outcome-segment" style="background: {colors[reason]}; width: {pct}%;">'
-                f'{labels[reason]}: {count}'
-                f'</div>'
+                f"{labels[reason]}: {count}"
+                f"</div>"
             )
 
     # Remaining (incomplete to fill window)
@@ -400,8 +439,8 @@ def render_outcome_summary(termination_counts: dict[str, int], window: int = 50)
         pct = remaining / denominator * 100
         segments.append(
             f'<div class="sqdn-outcome-segment" style="background: rgba(100,100,100,0.3); width: {pct}%;">'
-            f'Pending: {remaining}'
-            f'</div>'
+            f"Pending: {remaining}"
+            f"</div>"
         )
 
     bar_html = "".join(segments)
@@ -414,15 +453,15 @@ def render_outcome_summary(termination_counts: dict[str, int], window: int = 50)
             legend_items.append(
                 f'<span class="sqdn-outcome-legend-item">'
                 f'<span class="sqdn-outcome-legend-swatch" style="background: {colors[reason]};"></span>'
-                f'{labels[reason]}: {count}'
-                f'</span>'
+                f"{labels[reason]}: {count}"
+                f"</span>"
             )
     if remaining > 0:
         legend_items.append(
             f'<span class="sqdn-outcome-legend-item">'
             f'<span class="sqdn-outcome-legend-swatch" style="background: rgba(100,100,100,0.3);"></span>'
-            f'Pending: {remaining}'
-            f'</span>'
+            f"Pending: {remaining}"
+            f"</span>"
         )
 
     legend_html = "".join(legend_items)
@@ -444,6 +483,7 @@ def render_outcome_summary(termination_counts: dict[str, int], window: int = 50)
 # Metrics Row
 # =============================================================================
 
+
 def render_metrics_row(controller) -> None:
     """Render compact summary metrics row (5 key metrics)."""
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -455,26 +495,9 @@ def render_metrics_row(controller) -> None:
     with col3:
         st.metric("Best Score", f"{controller.high_score}")
     with col4:
-        st.metric("Avg (50)", f"{controller.agent.mean_scores_history[-1] if controller.agent and controller.agent.mean_scores_history else 0:.1f}")
+        st.metric(
+            "Avg (50)",
+            f"{controller.agent.mean_scores_history[-1] if controller.agent and controller.agent.mean_scores_history else 0:.1f}",
+        )
     with col4:
         st.metric("ε (Epsilon)", f"{controller.epsilon:.3f}")
-
-
-# =============================================================================
-# Status Badge
-# =============================================================================
-
-def render_status_badge(controller) -> str:
-    """Render status badge HTML for the current mode/paused state."""
-    mode = controller.mode
-    paused = controller.paused
-
-    if paused:
-        status_text = f"{mode.value.title()} · Paused"
-        css_class = "sqdn-status-paused"
-    else:
-        status_text = f"{mode.value.title()} · Running"
-        css_class = "sqdn-status-running"
-
-    mode_class = f"sqdn-status-{mode.value}"
-    return f'<span class="sqdn-status-badge {mode_class} {css_class}">{status_text}</span>'

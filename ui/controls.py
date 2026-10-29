@@ -10,6 +10,7 @@ from training import ActivityMode, AgentConfig, EnvConfig, TrainingController
 # Primary Toolbar (Main Content Area)
 # =============================================================================
 
+
 def render_primary_toolbar(controller: TrainingController) -> None:
     """Render the single primary control toolbar in the main content area.
 
@@ -36,7 +37,11 @@ def render_primary_toolbar(controller: TrainingController) -> None:
             )
 
             if new_mode != current_mode:
-                mode_map = {"Train": ActivityMode.TRAIN, "Evaluate": ActivityMode.EVALUATE, "Manual": ActivityMode.MANUAL}
+                mode_map = {
+                    "Train": ActivityMode.TRAIN,
+                    "Evaluate": ActivityMode.EVALUATE,
+                    "Manual": ActivityMode.MANUAL,
+                }
                 controller.set_mode(mode_map[new_mode])
                 controller.set_paused(True)
                 st.rerun()
@@ -127,33 +132,31 @@ def render_primary_toolbar(controller: TrainingController) -> None:
         with btn_col2:
             # Step Once (only when paused)
             if is_paused:
-                if st.button("⏭️ Step Once", key="toolbar_step", width="stretch", help="Advance exactly one transition"):
+                if st.button(
+                    "⏭️ Step Once",
+                    key="toolbar_step",
+                    width="stretch",
+                    help="Advance exactly one transition",
+                ):
                     _handle_step_once(controller)
                     st.rerun()
             else:
-                st.button("⏭️ Step Once", key="toolbar_step_disabled", width="stretch", disabled=True)
+                st.button(
+                    "⏭️ Step Once", key="toolbar_step_disabled", width="stretch", disabled=True
+                )
 
         with btn_col3:
             # Restart Board
-            if st.button("🔄 Restart Board", key="toolbar_restart", width="stretch",
-                         help="Restart current game, keep learned weights and training history"):
+            if st.button(
+                "🔄 Restart Board",
+                key="toolbar_restart",
+                width="stretch",
+                help="Restart current game, keep learned weights and training history",
+            ):
                 controller.restart_board()
                 if "last_decision" in st.session_state:
                     del st.session_state.last_decision
                 st.rerun()
-
-
-def _handle_step_once(controller: TrainingController) -> None:
-    """Handle Step Once button press with explicit terminal board behavior."""
-    if controller.game_over:
-        if controller.mode == ActivityMode.TRAIN:
-            controller.restart_board()
-        elif controller.mode == ActivityMode.EVALUATE:
-            controller.set_paused(True)
-        else:  # MANUAL
-            controller.restart_board()
-    else:
-        controller.step()
 
 
 def _handle_step_once(controller: TrainingController) -> None:
@@ -193,6 +196,7 @@ def render_status_badge_inline(controller: TrainingController) -> str:
 # Manual Control Buttons (when in Manual mode and paused)
 # =============================================================================
 
+
 def render_manual_controls(controller: TrainingController, snapshot) -> None:
     """Render manual control buttons when in Manual mode and paused."""
     if controller.mode != ActivityMode.MANUAL or not controller.paused or controller.game_over:
@@ -221,19 +225,22 @@ def render_manual_controls(controller: TrainingController, snapshot) -> None:
 # Sidebar Configuration Forms
 # =============================================================================
 
+
 def render_sidebar_environment(controller: TrainingController) -> None:
     """Render Environment configuration form in sidebar."""
     with st.expander("🌍 Environment", expanded=True):
         with st.form("env_config_form"):
             grid_size = st.slider(
                 "Grid Size",
-                10, 30,
+                10,
+                30,
                 controller.env_config.grid_size,
                 key="sidebar_grid_size",
             )
             step_penalty = st.number_input(
                 "Step Penalty",
-                -1.0, 0.0,
+                -1.0,
+                0.0,
                 controller.env_config.step_penalty,
                 0.001,
                 format="%.3f",
@@ -241,14 +248,16 @@ def render_sidebar_environment(controller: TrainingController) -> None:
             )
             food_reward = st.number_input(
                 "Food Reward",
-                0.0, 100.0,
+                0.0,
+                100.0,
                 controller.env_config.food_reward,
                 1.0,
                 key="sidebar_food_reward",
             )
             death_penalty = st.number_input(
                 "Death Penalty",
-                -100.0, 0.0,
+                -100.0,
+                0.0,
                 controller.env_config.death_penalty,
                 1.0,
                 key="sidebar_death_penalty",
@@ -279,7 +288,8 @@ def render_sidebar_agent(controller: TrainingController) -> None:
             )
             lr = st.number_input(
                 "Learning Rate",
-                1e-5, 1e-1,
+                1e-5,
+                1e-1,
                 controller.agent_config.lr,
                 1e-4,
                 format="%.5f",
@@ -287,7 +297,8 @@ def render_sidebar_agent(controller: TrainingController) -> None:
             )
             gamma = st.number_input(
                 "Gamma",
-                0.8, 0.999,
+                0.8,
+                0.999,
                 controller.agent_config.gamma,
                 0.001,
                 format="%.3f",
@@ -295,14 +306,16 @@ def render_sidebar_agent(controller: TrainingController) -> None:
             )
             epsilon_start = st.number_input(
                 "Epsilon Start",
-                0.0, 1.0,
+                0.0,
+                1.0,
                 controller.agent_config.epsilon_start,
                 0.01,
                 key="sidebar_eps_start",
             )
             epsilon_end = st.number_input(
                 "Epsilon End",
-                0.0, 0.5,
+                0.0,
+                0.5,
                 controller.agent_config.epsilon_end,
                 0.001,
                 format="%.3f",
@@ -310,7 +323,8 @@ def render_sidebar_agent(controller: TrainingController) -> None:
             )
             epsilon_decay = st.number_input(
                 "Epsilon Decay",
-                0.9, 0.9999,
+                0.9,
+                0.9999,
                 controller.agent_config.epsilon_decay,
                 0.0001,
                 format="%.4f",
@@ -348,12 +362,18 @@ def render_sidebar_agent(controller: TrainingController) -> None:
 def render_sidebar_checkpoints(controller: TrainingController) -> None:
     """Render Checkpoint operations in sidebar."""
     with st.expander("💾 Checkpoints", expanded=False):
-        save_path = st.text_input("Checkpoint Path", "checkpoints/snake_dqn.pth", key="sidebar_ckpt_path")
+        save_path = st.text_input(
+            "Checkpoint Path", "checkpoints/snake_dqn.pth", key="sidebar_ckpt_path"
+        )
 
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("💾 Save", width="stretch", key="sidebar_save",
-                         help="Save full training state (weights, optimizer, replay, RNG)"):
+            if st.button(
+                "💾 Save",
+                width="stretch",
+                key="sidebar_save",
+                help="Save full training state (weights, optimizer, replay, RNG)",
+            ):
                 if controller.agent:
                     controller.save_checkpoint(save_path)
                     st.success("Checkpoint saved!")
@@ -361,11 +381,17 @@ def render_sidebar_checkpoints(controller: TrainingController) -> None:
                     st.error("No agent to save")
 
         with c2:
-            if st.button("📂 Load", width="stretch", key="sidebar_load",
-                         help="Load checkpoint — replaces current agent and replay"):
+            if st.button(
+                "📂 Load",
+                width="stretch",
+                key="sidebar_load",
+                help="Load checkpoint — replaces current agent and replay",
+            ):
                 try:
                     info = controller.load_checkpoint(save_path)
-                    st.success(f"Loaded: ep {info.get('episode', 0)}, ε={info.get('epsilon', 1.0):.3f}")
+                    st.success(
+                        f"Loaded: ep {info.get('episode', 0)}, ε={info.get('epsilon', 1.0):.3f}"
+                    )
                     st.rerun()
                 except Exception as e:
                     st.error(f"Load failed: {e}")
@@ -378,16 +404,27 @@ def render_sidebar_destructive(controller: TrainingController) -> None:
 
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("🗑️ Clear History", width="stretch", key="sidebar_clear_hist",
-                         help="Clear displayed charts and statistics, KEEP model weights and replay buffer"):
+            if st.button(
+                "🗑️ Clear History",
+                width="stretch",
+                key="sidebar_clear_hist",
+                help="Clear displayed charts and statistics, KEEP model weights and replay buffer",
+            ):
                 controller.clear_history()
                 st.success("Training history cleared")
                 st.rerun()
 
         with c2:
-            if st.button("🆕 New Training Run", width="stretch", type="primary", key="sidebar_new_run",
-                         help="Create FRESH agent and replay buffer, DISCARD current model weights"):
-                if st.checkbox("I understand this discards the current model", key="confirm_new_run"):
+            if st.button(
+                "🆕 New Training Run",
+                width="stretch",
+                type="primary",
+                key="sidebar_new_run",
+                help="Create FRESH agent and replay buffer, DISCARD current model weights",
+            ):
+                if st.checkbox(
+                    "I understand this discards the current model", key="confirm_new_run"
+                ):
                     controller.new_run()
                     st.success("New training run started")
                     st.rerun()
@@ -410,8 +447,12 @@ def render_sidebar_display(controller: TrainingController) -> None:
             key="sidebar_show_grid",
         )
 
-        if st.button("🎮 New Game", width="stretch", key="sidebar_new_game",
-                     help="Same as Restart Board in toolbar"):
+        if st.button(
+            "🎮 New Game",
+            width="stretch",
+            key="sidebar_new_game",
+            help="Same as Restart Board in toolbar",
+        ):
             controller.restart_board()
             st.rerun()
 
@@ -452,6 +493,7 @@ def render_sidebar_help() -> None:
 # =============================================================================
 # Full Sidebar Renderer
 # =============================================================================
+
 
 def render_sidebar(controller: TrainingController) -> None:
     """Render complete sidebar with all configuration sections."""

@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 class EventType(Enum):
     """Explicit event types emitted at transition/episode source."""
+
     FOOD_EATEN = "food_eaten"
     EPISODE_END = "episode_end"
     REPLAY_ACTIVE = "replay_active"
@@ -40,6 +41,7 @@ class EventType(Enum):
 @dataclass(frozen=True)
 class TrainingEvent:
     """Explicit training event with stable ID and metadata."""
+
     id: int
     type: EventType
     message: str
@@ -246,7 +248,7 @@ class TrainingController:
         self._loss_max_history = 1000
 
         # Performance metrics (Phase 1)
-        self._metrics = {
+        self._metrics: dict[str, float | int | bool | None] = {
             "transitions": 0,
             "optimizer_updates": 0,
             "episodes_completed": 0,
@@ -397,18 +399,23 @@ class TrainingController:
     def step_id(self) -> int:
         return self._step_id
 
-    def get_metrics(self) -> dict[str, Any]:
+    def get_metrics(self) -> dict[str, float | int | bool]:
         """Get current performance metrics (copy for isolation)."""
         metrics = self._metrics.copy()
         # Add derived rates
         elapsed = metrics.get("total_training_time", 0.0)
-        if elapsed > 0:
-            metrics["transitions_per_sec"] = metrics["transitions"] / elapsed
-            metrics["optimizer_updates_per_sec"] = metrics["optimizer_updates"] / elapsed
+        if isinstance(elapsed, (int, float)) and elapsed > 0:
+            transitions = metrics.get("transitions", 0)
+            optimizer_updates = metrics.get("optimizer_updates", 0)
+            if isinstance(transitions, (int, float)):
+                metrics["transitions_per_sec"] = transitions / elapsed
+            if isinstance(optimizer_updates, (int, float)):
+                metrics["optimizer_updates_per_sec"] = optimizer_updates / elapsed
         else:
             metrics["transitions_per_sec"] = 0.0
             metrics["optimizer_updates_per_sec"] = 0.0
-        return metrics
+        # Remove None values
+        return {k: v for k, v in metrics.items() if v is not None}
 
     # -------------------------------------------------------------------------
     # Event System
@@ -439,7 +446,7 @@ class TrainingController:
         )
         self._events.append(event)
         if len(self._events) > self._max_events:
-            self._events = self._events[-self._max_events:]
+            self._events = self._events[-self._max_events :]
         return event
 
     def get_events(self, since_id: int = 0) -> list[TrainingEvent]:
@@ -628,7 +635,9 @@ class TrainingController:
                 if self._observation is not None
                 else None
             )
-        self._metrics["time_action_selection"] += time.monotonic() - t_action_start
+        self._metrics["time_action_selection"] = (
+            (self._metrics.get("time_action_selection") or 0.0) + time.monotonic() - t_action_start
+        )
 
         # --- Capture PRE-ACTION decision snapshot ---
         # This is what the agent saw and decided BEFORE stepping
@@ -641,7 +650,9 @@ class TrainingController:
         # --- Step environment ---
         t_env_start = time.monotonic()
         next_obs, reward, terminated, truncated, info = self._env.step(action)
-        self._metrics["time_env_step"] += time.monotonic() - t_env_start
+        self._metrics["time_env_step"] = (
+            (self._metrics.get("time_env_step") or 0.0) + time.monotonic() - t_env_start
+        )
         done = terminated or truncated
 
         # --- Emit FOOD_EATEN event ---
@@ -660,12 +671,15 @@ class TrainingController:
         if self._mode == ActivityMode.TRAIN and self._agent is not None:
             t_opt_start = time.monotonic()
             # Store transition (terminated controls bootstrap, truncated stored separately)
+            assert self._observation is not None, "Observation should be set before training"
             self._agent.remember(self._observation, action, reward, next_obs, terminated, truncated)
             # Train on short memory (immediate)
             self._agent.train_short_memory(self._observation, action, reward, next_obs, terminated)
             # Train on replay memory
             replay_loss = self._agent.train_long_memory()
-            self._metrics["time_optimization"] += time.monotonic() - t_opt_start
+            self._metrics["time_optimization"] = (
+                (self._metrics.get("time_optimization") or 0.0) + time.monotonic() - t_opt_start
+            )
 
             # Update replay metrics
             self._metrics["replay_buffer_size"] = len(self._agent.memory)
@@ -681,7 +695,9 @@ class TrainingController:
                 )
 
             if replay_loss is not None:
-                self._metrics["optimizer_updates"] += 1
+                self._metrics["optimizer_updates"] = (
+                    self._metrics.get("optimizer_updates") or 0
+                ) + 1
 
             # Sync agent's step counter
             self._agent.total_steps += 1
@@ -692,22 +708,28 @@ class TrainingController:
         self._game_over = done
         self._action = action
         self._step_id += 1
-        self._metrics["transitions"] += 1
+        self._metrics["transitions"] = (self._metrics.get("transitions") or 0) + 1
 
         # --- Update Q-values for NEXT state visualization ---
         if self._agent is not None:
             t_diag_start = time.monotonic()
             self._q_values = self._agent.get_q_values(next_obs)
             self._action_probs = self.agent.trainer.probabilities_from_q_values(self._q_values)
-            self._metrics["time_diagnostics"] += time.monotonic() - t_diag_start
+            self._metrics["time_diagnostics"] = (
+                (self._metrics.get("time_diagnostics") or 0.0) + time.monotonic() - t_diag_start
+            )
 
         # --- Handle episode completion ---
         if done:
             self._handle_episode_end(info["score"], replay_loss, terminated, truncated, info)
-            self._metrics["episodes_completed"] += 1
+            self._metrics["episodes_completed"] = (self._metrics.get("episodes_completed") or 0) + 1
 
         # Update total training time
-        self._metrics["total_training_time"] = time.monotonic() - self._metrics["start_time"]
+        start_time = self._metrics.get("start_time")
+        if start_time is not None:
+            self._metrics["total_training_time"] = time.monotonic() - start_time
+        else:
+            self._metrics["total_training_time"] = 0.0
 
         return self._make_snapshot(
             pre_observation=pre_observation,
@@ -768,7 +790,9 @@ class TrainingController:
 
         # Validate execution policy
         if execution_policy not in ("Watch", "FastTraining"):
-            raise ValueError(f"Unknown execution policy: {execution_policy!r}. Expected 'Watch' or 'FastTraining'.")
+            raise ValueError(
+                f"Unknown execution policy: {execution_policy!r}. Expected 'Watch' or 'FastTraining'."
+            )
 
         # Validate FastTraining parameters
         if execution_policy == "FastTraining":
@@ -832,6 +856,7 @@ class TrainingController:
         self._fault_error = error
         self._fault_tick_id = tick_id
         import traceback
+
         self._fault_traceback = traceback.format_exc()
         logger.error(
             "Controller faulted: session=%s tick=%s error=%s",
@@ -850,16 +875,16 @@ class TrainingController:
         assert self._observation is not None
 
         if self._mode == ActivityMode.TRAIN:
-            return agent.get_action_with_q_values(self._observation, training=True)
+            return agent.get_action_with_q_values(self._observation, training=True)  # type: ignore
         elif self._mode == ActivityMode.EVALUATE:
             action, reason, q_values = agent.get_action_with_q_values(
                 self._observation, training=False
             )
-            return action, reason, q_values
+            return action, reason, q_values  # type: ignore
         else:  # MANUAL
             # Should not reach here - manual actions passed explicitly
             q_values = agent.get_q_values(self._observation)
-            return 0, "manual", q_values
+            return 0, "manual", q_values  # type: ignore
 
     def _handle_episode_end(
         self,
@@ -908,9 +933,7 @@ class TrainingController:
             # For EVALUATE/MANUAL, still track episode_id for UI
             self._episode_id += 1
 
-    def _classify_termination(
-        self, terminated: bool, truncated: bool, info: dict[str, Any]
-    ) -> str:
+    def _classify_termination(self, terminated: bool, truncated: bool, info: dict[str, Any]) -> str:
         """Classify episode termination reason from environment info."""
         if truncated:
             return "timeout"
@@ -1060,7 +1083,7 @@ class TrainingController:
 
             # Load checkpoint into candidate
             try:
-                info = candidate_agent.load_checkpoint(filepath)
+                info: dict[str, Any] = candidate_agent.load_checkpoint(filepath)
             except Exception as e:
                 raise ValueError(f"Failed to load checkpoint: {e}") from e
 
@@ -1090,11 +1113,15 @@ class TrainingController:
     def _validate_agent_architecture(self, agent: Agent) -> bool:
         """Validate that agent architecture matches current config."""
         model = agent.trainer.model
-        return (
-            model.input_size == self.agent_config.input_size
-            and model.hidden_size == self.agent_config.hidden_size
-            and model.output_size == self.agent_config.output_size
+        input_size: int = model.input_size
+        hidden_size: int = model.hidden_size
+        output_size: int = model.output_size
+        matches = (
+            input_size == self.agent_config.input_size
+            and hidden_size == self.agent_config.hidden_size
+            and output_size == self.agent_config.output_size
         )
+        return matches
 
     def _validate_optimizer_state(self, agent: Agent) -> None:
         """

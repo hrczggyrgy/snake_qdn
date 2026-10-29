@@ -249,6 +249,116 @@ class TestSnakeEnvironment:
 
         env.close()
 
+    def test_rng_isolation_independent_environments(self):
+        """Test that two environments with same seed produce identical sequences."""
+        # Create environments and step them identically
+        env1 = SnakeGameAI(grid_size=10, seed=42)
+        env2 = SnakeGameAI(grid_size=10, seed=42)
+
+        # The constructor already calls reset(), so initial states should match
+        assert list(env1.snake) == list(env2.snake)
+        assert env1.food == env2.food
+
+        # Use a fixed action sequence for both environments
+        actions = [0, 1, 2, 0, 0, 1, 2, 2, 1, 0, 0, 0, 1, 1, 2, 2, 2, 0, 1, 2]
+        for action in actions:
+            obs1, reward1, term1, trunc1, info1 = env1.step(action)
+            obs2, reward2, term2, trunc2, info2 = env2.step(action)
+
+            assert np.array_equal(obs1, obs2), f"Observations diverged: {obs1} vs {obs2}"
+            assert reward1 == reward2, f"Rewards diverged: {reward1} vs {reward2}"
+            assert term1 == term2
+            assert trunc1 == trunc2
+            assert info1["score"] == info2["score"]
+            assert list(env1.snake) == list(env2.snake)
+            assert env1.food == env2.food
+
+            if term1 or trunc1:
+                break
+
+        env1.close()
+        env2.close()
+
+    def test_rng_isolation_no_cross_contamination(self):
+        """Test that using one environment doesn't affect another's RNG state."""
+        env1 = SnakeGameAI(grid_size=10, seed=100)
+        env2 = SnakeGameAI(grid_size=10, seed=200)
+
+        # Step env1 a few times
+        for _ in range(10):
+            action = env1._rng.randint(0, 2)
+            env1.step(action)
+
+        # Step env2 a few times
+        for _ in range(10):
+            action = env2._rng.randint(0, 2)
+            env2.step(action)
+
+        # Create new environments with same seeds - they should match original states
+        env1_ref = SnakeGameAI(grid_size=10, seed=100)
+        env2_ref = SnakeGameAI(grid_size=10, seed=200)
+
+        for _ in range(10):
+            action = env1_ref._rng.randint(0, 2)
+            env1_ref.step(action)
+
+        for _ in range(10):
+            action = env2_ref._rng.randint(0, 2)
+            env2_ref.step(action)
+
+        # States should match
+        assert list(env1.snake) == list(env1_ref.snake)
+        assert env1.food == env1_ref.food
+        assert list(env2.snake) == list(env2_ref.snake)
+        assert env2.food == env2_ref.food
+
+        env1.close()
+        env2.close()
+        env1_ref.close()
+        env2_ref.close()
+
+    def test_reset_with_seed_reproducibility(self):
+        """Test that reset(seed=X) produces reproducible initial state."""
+        # Create environment without seed, then reset with seed
+        env1 = SnakeGameAI(grid_size=10)
+        env2 = SnakeGameAI(grid_size=10)
+
+        obs1, info1 = env1.reset(seed=999)
+        obs2, info2 = env2.reset(seed=999)
+
+        # Initial states should match after reset with same seed
+        assert np.array_equal(obs1, obs2)
+        assert list(env1.snake) == list(env2.snake)
+        assert env1.food == env2.food
+
+        # Step both with same actions
+        for _ in range(10):
+            action = env1._rng.randint(0, 2)
+            o1, r1, t1, tr1, i1 = env1.step(action)
+            o2, r2, t2, tr2, i2 = env2.step(action)
+            assert np.array_equal(o1, o2)
+            assert r1 == r2
+            assert list(env1.snake) == list(env2.snake)
+
+        env1.close()
+        env2.close()
+
+    def test_different_seeds_produce_different_sequences(self):
+        """Test that different seeds typically produce different food placement."""
+        # Use a larger grid to reduce collision probability
+        seeds = list(range(1, 101))
+        foods = []
+
+        for seed in seeds:
+            env = SnakeGameAI(grid_size=20, seed=seed)  # 20x20 = 400 cells, snake=3, 397 available
+            foods.append(env.food)
+            env.close()
+
+        # With 100 seeds on 20x20 grid, expected unique ≈ 397 * (1 - (396/397)^99) ≈ 88
+        # So we expect ~88 unique, allow some variance
+        unique_foods = len(set(foods))
+        assert unique_foods >= 80, f"Too many food collisions: {unique_foods}/100 unique"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

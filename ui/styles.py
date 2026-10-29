@@ -11,22 +11,22 @@ Supports both light and dark Streamlit themes.
 # =============================================================================
 
 # Spacing scale (rem)
-SPACE_1 = "0.25rem"   # 4px
-SPACE_2 = "0.5rem"    # 8px
-SPACE_3 = "0.75rem"   # 12px
-SPACE_4 = "1rem"      # 16px
-SPACE_5 = "1.5rem"    # 24px
-SPACE_6 = "2rem"      # 32px
+SPACE_1 = "0.25rem"  # 4px
+SPACE_2 = "0.5rem"  # 8px
+SPACE_3 = "0.75rem"  # 12px
+SPACE_4 = "1rem"  # 16px
+SPACE_5 = "1.5rem"  # 24px
+SPACE_6 = "2rem"  # 32px
 
 # Typography
 FONT_MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
 FONT_SANS = "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
-TEXT_XS = "0.75rem"   # 12px
+TEXT_XS = "0.75rem"  # 12px
 TEXT_SM = "0.875rem"  # 14px
-TEXT_BASE = "1rem"    # 16px
+TEXT_BASE = "1rem"  # 16px
 TEXT_LG = "1.125rem"  # 18px
-TEXT_XL = "1.5rem"    # 24px
-TEXT_2XL = "2rem"     # 32px
+TEXT_XL = "1.5rem"  # 24px
+TEXT_2XL = "2rem"  # 32px
 
 # Border radius
 RADIUS_SM = "4px"
@@ -538,9 +538,11 @@ COMPONENT_CSS = """
 # Public API
 # =============================================================================
 
+
 def inject_global_styles():
     """Inject global CSS tokens and component styles."""
     import streamlit as st
+
     st.markdown(f"<style>{COLORS}\n{COMPONENT_CSS}</style>", unsafe_allow_html=True)
 
 
@@ -548,7 +550,10 @@ def get_plotly_template():
     """Return a Plotly template dict consistent with theme tokens."""
     return {
         "layout": {
-            "font": {"family": "ui-sans-serif, system-ui, sans-serif", "color": "var(--sqdn-text-primary)"},
+            "font": {
+                "family": "ui-sans-serif, system-ui, sans-serif",
+                "color": "var(--sqdn-text-primary)",
+            },
             "plot_bgcolor": "rgba(0,0,0,0)",
             "paper_bgcolor": "rgba(0,0,0,0)",
             "xaxis": {

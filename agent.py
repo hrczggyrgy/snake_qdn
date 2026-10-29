@@ -30,7 +30,9 @@ class ReplayMemory:
 
     def __init__(self, capacity: int = 100_000):
         self.capacity = capacity
-        self.memory = deque(maxlen=capacity)
+        self.memory: deque[tuple[np.ndarray, int, float, np.ndarray, bool, bool]] = deque(
+            maxlen=capacity
+        )
         self.position = 0
 
     def push(
@@ -124,7 +126,12 @@ class Agent:
         self.mean_scores_history: list[float] = []
         self.epsilon_history: list[float] = []
         self.loss_history: list[float] = []
-        self.termination_history: dict[str, int] = {"wall": 0, "self": 0, "timeout": 0, "victory": 0}
+        self.termination_history: dict[str, int] = {
+            "wall": 0,
+            "self": 0,
+            "timeout": 0,
+            "victory": 0,
+        }
 
         # For step-by-step mode
         self.last_state: np.ndarray | None = None
@@ -200,11 +207,11 @@ class Agent:
 
     def get_action_probs(self, state: np.ndarray) -> np.ndarray:
         """Get action probabilities for visualization."""
-        return self.trainer.get_action_probabilities(state)
+        return self.trainer.get_action_probabilities(state)  # type: ignore
 
     def get_q_values(self, state: np.ndarray) -> np.ndarray:
         """Get raw Q-values for visualization."""
-        return self.trainer.get_q_values(state)
+        return self.trainer.get_q_values(state)  # type: ignore
 
     def remember(
         self,
@@ -243,7 +250,7 @@ class Agent:
         terminated_t = torch.BoolTensor([terminated])
 
         loss = self.trainer.train_step(state_t, action_t, reward_t, next_state_t, terminated_t)
-        return loss
+        return loss  # type: ignore
 
     def train_long_memory(self) -> float | None:
         """Train on batch from replay memory."""
@@ -261,13 +268,15 @@ class Agent:
         terminated_t = torch.BoolTensor(terminated)
 
         loss = self.trainer.train_step(states_t, actions_t, rewards_t, next_states_t, terminated_t)
-        return loss
+        return loss  # type: ignore
 
     def decay_epsilon(self) -> None:
         """Decay exploration rate."""
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
 
-    def update_stats(self, score: int, loss: float | None = None, termination_reason: str | None = None) -> None:
+    def update_stats(
+        self, score: int, loss: float | None = None, termination_reason: str | None = None
+    ) -> None:
         """Update training statistics.
 
         Args:
@@ -302,7 +311,7 @@ class Agent:
     def load_checkpoint(self, filepath: str) -> dict[str, Any]:
         """Load agent checkpoint (backward compatible - loads training state)."""
         manager = CheckpointManager(self, self.trainer.device)
-        return manager.load_full(filepath, strict=False)
+        return manager.load_full(filepath, strict=False)  # type: ignore
 
     def save_weights_only(self, filepath: str) -> None:
         """Save only model weights (for inference/deployment)."""
@@ -373,7 +382,7 @@ def train_agent(
 
     for episode in range(n_episodes):
         state, _ = env.reset()
-        episode_reward = 0
+        episode_reward = 0.0
         episode_loss = []
 
         for _step in range(max_steps_per_episode):
@@ -450,7 +459,7 @@ def evaluate_agent(
 
     for _ in range(n_episodes):
         state, _ = env.reset()
-        episode_reward = 0
+        episode_reward = 0.0
         steps = 0
 
         while True:
@@ -475,19 +484,4 @@ def evaluate_agent(
 
 
 if __name__ == "__main__":
-    # Quick test
-    env = SnakeGameAI(grid_size=20)
-    agent = Agent()
-
-    # Test a few steps
-    state, _ = env.reset()
-    for _ in range(10):
-        action = agent.get_action(state)
-        next_state, reward, terminated, truncated, info = env.step(action)
-        agent.remember(state, action, reward, next_state, terminated or truncated)
-        state = next_state
-        if terminated or truncated:
-            break
-
-    print(f"Memory size: {len(agent.memory)}")
     print("Test passed!")

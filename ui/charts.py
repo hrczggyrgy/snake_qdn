@@ -22,7 +22,7 @@ from ui.styles import (
 
 def apply_template(fig: go.Figure, height: int | None = None, uirevision: str | None = None):
     """Apply consistent template to a figure.
-    
+
     Uses explicit construction order:
     1. Create figure
     2. Apply base template (explicit layout properties via update_layout for proper merging)
@@ -32,7 +32,7 @@ def apply_template(fig: go.Figure, height: int | None = None, uirevision: str | 
     template = get_plotly_template()
     # Apply template layout properties via update_layout to allow proper merging
     # with subsequent chart-specific layout updates.
-    # Don't rely on 'key in fig.layout' because Plotly graph objects report True 
+    # Don't rely on 'key in fig.layout' because Plotly graph objects report True
     # for properties that exist as defaults but weren't explicitly set by chart code.
     fig.update_layout(template["layout"])
     if height is not None:
@@ -45,6 +45,7 @@ def apply_template(fig: go.Figure, height: int | None = None, uirevision: str | 
 # =============================================================================
 # Score Chart
 # =============================================================================
+
 
 def render_score_chart(
     recent_scores: list[int],
@@ -117,13 +118,14 @@ def render_score_chart(
     # Apply template FIRST (base layout)
     fig = apply_template(fig, height=CHART_HEIGHT_MAIN, uirevision="snake-scores")
     # Chart-specific margins
-    fig.update_layout(margin=dict(l=50, r=20, t=35, b=40))
+    fig.update_layout(margin={"l": 50, "r": 20, "t": 35, "b": 40})
     return fig
 
 
 # =============================================================================
 # Loss Chart
 # =============================================================================
+
 
 def render_loss_chart(
     recent_loss: list[float],
@@ -134,7 +136,7 @@ def render_loss_chart(
     fig = go.Figure()
 
     if recent_loss:
-        values = np.asarray(recent_loss, dtype=float)
+        values: np.ndarray = np.asarray(recent_loss, dtype=float)
         if values.size:
             last_step = optimizer_steps
             steps = np.arange(last_step - len(values) + 1, last_step + 1)
@@ -239,13 +241,14 @@ def render_loss_chart(
 
     # Apply template FIRST (base layout)
     fig = apply_template(fig, height=CHART_HEIGHT_SMALL, uirevision="snake-loss")
-    fig.update_layout(margin=dict(l=50, r=20, t=35, b=40))
+    fig.update_layout(margin={"l": 50, "r": 20, "t": 35, "b": 40})
     return fig
 
 
 # =============================================================================
 # Epsilon Chart
 # =============================================================================
+
 
 def render_epsilon_chart(
     recent_epsilon: list[float],
@@ -289,13 +292,14 @@ def render_epsilon_chart(
 
     # Apply template FIRST (base layout)
     fig = apply_template(fig, height=CHART_HEIGHT_SMALL, uirevision="snake-epsilon")
-    fig.update_layout(margin=dict(l=50, r=20, t=35, b=40))
+    fig.update_layout(margin={"l": 50, "r": 20, "t": 35, "b": 40})
     return fig
 
 
 # =============================================================================
 # Throughput Chart (optional)
 # =============================================================================
+
 
 def render_throughput_chart(
     transitions_per_sec: list[float],
@@ -348,13 +352,14 @@ def render_throughput_chart(
 
     # Apply template FIRST (base layout)
     fig = apply_template(fig, height=CHART_HEIGHT_SMALL, uirevision="snake-throughput")
-    fig.update_layout(margin=dict(l=50, r=20, t=35, b=40))
+    fig.update_layout(margin={"l": 50, "r": 20, "t": 35, "b": 40})
     return fig
 
 
 # =============================================================================
 # State Vector Chart
 # =============================================================================
+
 
 def render_state_vector(observation: np.ndarray | None) -> go.Figure | None:
     """Render the 11-dimensional state vector as horizontal bars grouped by category."""
@@ -394,8 +399,13 @@ def render_state_vector(observation: np.ndarray | None) -> go.Figure | None:
     fig.update_layout(
         title={"text": "State Vector (11D)", "font": {"size": 11}},
         xaxis={"range": [0, 1.1], "showgrid": False, "showticklabels": False, "zeroline": False},
-        yaxis={"showgrid": False, "autorange": "reversed", "tickfont": {"size": 11}, "automargin": True},
-        margin=dict(l=120, r=20, t=45, b=25),
+        yaxis={
+            "showgrid": False,
+            "autorange": "reversed",
+            "tickfont": {"size": 11},
+            "automargin": True,
+        },
+        margin={"l": 120, "r": 20, "t": 45, "b": 25},
     )
     return fig
 
@@ -403,6 +413,7 @@ def render_state_vector(observation: np.ndarray | None) -> go.Figure | None:
 # =============================================================================
 # Q-Values Chart
 # =============================================================================
+
 
 def render_q_values(
     q_values: np.ndarray | None,
@@ -519,7 +530,7 @@ def render_q_values(
         title={"text": "Q-Values per Action", "font": {"size": 11}},
         yaxis_title="Q-Value",
         annotations=annotations,
-        margin=dict(l=50, r=20, t=55, b=45),
+        margin={"l": 50, "r": 20, "t": 55, "b": 45},
     )
 
     # Ensure y-axis has padding for annotations
@@ -534,6 +545,7 @@ def render_q_values(
 # =============================================================================
 # Network Activations Chart
 # =============================================================================
+
 
 def render_network_activations(
     snapshot,
@@ -661,7 +673,7 @@ def render_network_activations(
         title={"text": title_text, "font": {"size": 11}},
         xaxis={"range": [-0.4, 3.4], "showgrid": False, "showticklabels": False, "zeroline": False},
         yaxis={"range": [-1.3, 1.3], "showgrid": False, "showticklabels": False, "zeroline": False},
-        margin=dict(l=30, r=30, t=45, b=30),
+        margin={"l": 30, "r": 30, "t": 45, "b": 30},
     )
     return fig
 
@@ -669,6 +681,7 @@ def render_network_activations(
 # =============================================================================
 # Termination Reason Stacked Bar
 # =============================================================================
+
 
 def render_termination_summary(
     termination_counts: dict[str, int],
@@ -700,7 +713,7 @@ def render_termination_summary(
     fig = go.Figure()
 
     total = sum(termination_counts.values())
-    x_start = 0
+    x_start: float = 0.0
 
     for reason in ["wall", "self", "timeout", "victory"]:
         count = termination_counts.get(reason, 0)
@@ -718,7 +731,7 @@ def render_termination_summary(
                 textposition="inside",
                 textfont={"color": "white", "size": 10, "family": "Arial Black"},
                 showlegend=True,
-                hovertemplate=f"{labels_map[reason]}: {count} ({count/total*100:.1f}% of {total})<extra></extra>",
+                hovertemplate=f"{labels_map[reason]}: {count} ({count / total * 100:.1f}% of {total})<extra></extra>",
             )
         )
         x_start += width
@@ -747,9 +760,22 @@ def render_termination_summary(
             "font": {"size": 11},
         },
         barmode="stack",
-        xaxis={"range": [0, 1], "showgrid": False, "showticklabels": False, "zeroline": False, "title": "Proportion of Window"},
+        xaxis={
+            "range": [0, 1],
+            "showgrid": False,
+            "showticklabels": False,
+            "zeroline": False,
+            "title": "Proportion of Window",
+        },
         yaxis={"showgrid": False, "showticklabels": False},
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1, "font": {"size": 9}},
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "xanchor": "right",
+            "x": 1,
+            "font": {"size": 9},
+        },
         height=80,
         margin={"l": 10, "r": 10, "t": 30, "b": 10},
     )
@@ -763,6 +789,7 @@ def render_termination_summary(
 # =============================================================================
 # Evaluation vs Training Score Comparison (optional)
 # =============================================================================
+
 
 def render_eval_comparison(
     train_scores: list[int],
@@ -810,5 +837,5 @@ def render_eval_comparison(
 
     # Apply template FIRST (base layout)
     fig = apply_template(fig, height=CHART_HEIGHT_MAIN, uirevision="snake-eval-comparison")
-    fig.update_layout(margin=dict(l=50, r=20, t=35, b=40))
+    fig.update_layout(margin={"l": 50, "r": 20, "t": 35, "b": 40})
     return fig
