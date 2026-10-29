@@ -35,7 +35,6 @@ from ui.game import (
     render_outcome_summary,
 )
 from ui.inspection import (
-    classify_termination,
     render_inspect_learning,
     render_inspect_learning_simple,
     render_training_diagnostics,
@@ -87,7 +86,6 @@ __all__ = [
     "render_metrics_row",
     "render_outcome_summary",
     # inspection
-    "classify_termination",
     "render_inspect_learning",
     "render_inspect_learning_simple",
     "render_training_diagnostics",

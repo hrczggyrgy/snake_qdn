@@ -95,6 +95,7 @@ def render_inspect_learning_simple(
 def render_training_diagnostics(controller: TrainingController, snapshot: TrainingSnapshot) -> None:
     """Render the lower Training Diagnostics area (collapsible)."""
     from ui.charts import (
+        render_bellman_update,
         render_epsilon_chart,
         render_loss_chart,
         render_score_chart,
@@ -158,7 +159,8 @@ def render_training_diagnostics(controller: TrainingController, snapshot: Traini
         if controller.agent and hasattr(controller.agent, "termination_history"):
             term_counts = controller.agent.termination_history
             if term_counts:
-                fig_term = render_termination_summary(term_counts, window=50)
+                recent_terms = list(controller.agent.recent_terminations) if hasattr(controller.agent, "recent_terminations") else None
+                fig_term = render_termination_summary(term_counts, window=50, recent_terminations=recent_terms)
                 if fig_term:
                     st.plotly_chart(
                         fig_term,
@@ -167,7 +169,17 @@ def render_training_diagnostics(controller: TrainingController, snapshot: Traini
                         key="diag_termination",
                     )
 
-        # Row 4: Event History (if available)
+        # Row 4: Bellman Update Explanation
+        if snapshot.bellman_details is not None:
+            st.markdown("---")
+            st.caption("**Bellman Update** — sampled from replay (may differ from visible board)")
+            fig_bellman = render_bellman_update(snapshot.bellman_details)
+            if fig_bellman:
+                st.plotly_chart(
+                    fig_bellman, width="stretch", config={"displayModeBar": False}, key="diag_bellman"
+                )
+
+        # Row 5: Event History (if available)
         if hasattr(st.session_state, "event_history") and st.session_state.event_history:
             with st.expander("📜 Event History", expanded=False):
                 for event in reversed(st.session_state.event_history[-50:]):
@@ -178,51 +190,4 @@ def render_training_diagnostics(controller: TrainingController, snapshot: Traini
                     st.caption(f"{icon} {event.get('message', '')}")
 
 
-# =============================================================================
-# Episode Termination Tracking (helper for agent)
-# =============================================================================
 
-TERMINATION_REASON_MAP = {
-    "wall": "wall",
-    "self": "self",
-    "timeout": "timeout",
-    "victory": "victory",
-}
-
-
-def classify_termination(
-    game_state: dict, terminated: bool, truncated: bool, info: dict
-) -> str | None:
-    """Classify episode termination reason from environment info.
-
-    Returns one of: 'wall', 'self', 'timeout', 'victory', or None if not terminal.
-    """
-    if not (terminated or truncated):
-        return None
-
-    if truncated:
-        return "timeout"
-
-    # terminated=True - check collision type
-    # Food is None means board full (victory)
-    if game_state.get("food") is None:
-        return "victory"
-
-    # Check if head collided with wall or self
-    snake = game_state.get("snake", [])
-    if not snake:
-        return "wall"  # fallback
-
-    head = snake[0]
-    grid_size = game_state.get("grid_size", 20)
-
-    # Wall collision
-    if head[0] < 0 or head[0] >= grid_size or head[1] < 0 or head[1] >= grid_size:
-        return "wall"
-
-    # Self collision (head in body)
-    if head in snake[1:]:
-        return "self"
-
-    # Default to wall if we can't determine
-    return "wall"

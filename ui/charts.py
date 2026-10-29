@@ -684,16 +684,35 @@ def render_network_activations(
 
 
 def render_termination_summary(
-    termination_counts: dict[str, int],
-    window: int,
+    termination_counts: dict[str, int] | None = None,
+    window: int = 50,
+    recent_terminations: list[str] | None = None,
 ) -> go.Figure | None:
     """Render horizontal stacked bar of episode termination reasons.
 
     Args:
-        termination_counts: Dict mapping reason -> count (keys: wall, self, timeout, victory)
-        window: Total episodes in window (denominator)
+        termination_counts: Lifetime totals (used if recent_terminations not provided)
+        window: Maximum episodes in the window (denominator is actual completed in window)
+        recent_terminations: List of recent termination reasons (most recent last), maxlen=window.
+                           If provided, this takes precedence over termination_counts.
     """
-    if not termination_counts or sum(termination_counts.values()) == 0:
+    # Determine what to display
+    if recent_terminations is not None:
+        # Count from recent window
+        counts = {"wall": 0, "self": 0, "timeout": 0, "victory": 0}
+        for reason in recent_terminations:
+            if reason in counts:
+                counts[reason] += 1
+        completed = len(recent_terminations)
+        denominator = completed  # Use actual completed episodes in window
+        source_label = f"last {completed}"
+    elif termination_counts and sum(termination_counts.values()) > 0:
+        # Fallback to lifetime counts
+        counts = termination_counts
+        completed = sum(counts.values())
+        denominator = max(completed, window) if completed >= window else completed
+        source_label = f"lifetime ({completed})"
+    else:
         return None
 
     # Color mapping
@@ -712,14 +731,14 @@ def render_termination_summary(
 
     fig = go.Figure()
 
-    total = sum(termination_counts.values())
+    total = sum(counts.values())
     x_start: float = 0.0
 
     for reason in ["wall", "self", "timeout", "victory"]:
-        count = termination_counts.get(reason, 0)
+        count = counts.get(reason, 0)
         if count == 0:
             continue
-        width = count / window  # Relative to window, not total
+        width = count / denominator  # Relative to actual completed in window
         fig.add_trace(
             go.Bar(
                 x=[width],
@@ -731,32 +750,32 @@ def render_termination_summary(
                 textposition="inside",
                 textfont={"color": "white", "size": 10, "family": "Arial Black"},
                 showlegend=True,
-                hovertemplate=f"{labels_map[reason]}: {count} ({count / total * 100:.1f}% of {total})<extra></extra>",
+                hovertemplate=f"{labels_map[reason]}: {count} ({count / max(total, 1) * 100:.1f}% of {total})<extra></extra>",
             )
         )
         x_start += width
 
-    # Add remaining (incomplete/ongoing) as transparent
-    remaining = window - total
+    # Add remaining (incomplete to fill window) as transparent
+    remaining = window - completed
     if remaining > 0:
         fig.add_trace(
             go.Bar(
-                x=[remaining / window],
+                x=[remaining / denominator],
                 y=["Outcomes"],
                 orientation="h",
-                name="Ongoing",
+                name="Pending",
                 marker_color="rgba(100,100,100,0.3)",
                 text=[f"{remaining}"],
                 textposition="inside",
                 textfont={"color": "rgba(255,255,255,0.5)", "size": 10},
                 showlegend=True,
-                hovertemplate=f"Ongoing/Incomplete: {remaining}<extra></extra>",
+                hovertemplate=f"Pending (to reach window of {window}): {remaining}<extra></extra>",
             )
         )
 
     fig.update_layout(
         title={
-            "text": f"Episode Outcomes (last {window})",
+            "text": f"Episode Outcomes ({source_label})",
             "font": {"size": 11},
         },
         barmode="stack",
@@ -838,4 +857,112 @@ def render_eval_comparison(
     # Apply template FIRST (base layout)
     fig = apply_template(fig, height=CHART_HEIGHT_MAIN, uirevision="snake-eval-comparison")
     fig.update_layout(margin={"l": 50, "r": 20, "t": 35, "b": 40})
+    return fig
+
+
+# =============================================================================
+# Bellman Update Explanation
+# =============================================================================
+
+
+def render_bellman_update(details: dict | None) -> go.Figure | None:
+    """Render the Bellman update equation for a sampled replay transition.
+
+    Shows: y = r + γ(1-terminated)max_a Q_target(s',a)
+    and: TD error = y - Q_online(s,a)
+    """
+    if not details:
+        fig = go.Figure()
+        fig.add_annotation(
+            x=0.5, y=0.5, xref="paper", yref="paper",
+            text="No Bellman update available\n(Replay not active or no recent training)",
+            showarrow=False, font={"size": 12, "color": "rgba(128,128,128,0.8)"}
+        )
+        fig = apply_template(fig, height=300, uirevision="snake-bellman")
+        fig.update_layout(margin={"l": 50, "r": 20, "t": 35, "b": 40})
+        return fig
+
+    # Extract values
+    state = details.get("state", np.zeros(11))
+    action = details.get("action", 0)
+    reward = details.get("reward", 0.0)
+    next_state = details.get("next_state", np.zeros(11))
+    terminated = details.get("terminated", False)
+    current_q = details.get("current_q", np.zeros(3))
+    current_q_taken = details.get("current_q_taken", 0.0)
+    target_q = details.get("target_q", 0.0)
+    td_error = details.get("td_error", 0.0)
+    target_q_max = details.get("target_q_max", 0.0)
+    greedy_action = details.get("greedy_action", 0)
+    gamma = details.get("gamma", 0.99)
+
+    fig = go.Figure()
+
+    # State vector (compact)
+    fig.add_trace(go.Bar(
+        x=state,
+        y=[f"s[{i}]" for i in range(len(state))],
+        orientation="h",
+        marker_color="rgba(100,100,255,0.3)",
+        name="State s",
+        showlegend=False,
+        hovertemplate="State[%{y}]: %{x:.2f}<extra></extra>",
+    ))
+
+    # Equation display as annotations
+    terminated_str = "1" if terminated else "0"
+    equation_lines = [
+        f"Bellman Target: y = r + γ(1-d) max_a' Q'(s',a')",
+        f"                = {reward:.3f} + {gamma:.3f}(1-{terminated_str}) × {target_q_max:.3f}",
+        f"                = {target_q:.3f}",
+        f"",
+        f"Online Q(s,a): Q(s,a) = {current_q_taken:.3f}",
+        f"",
+        f"TD Error: δ = y - Q(s,a) = {target_q:.3f} - {current_q_taken:.3f} = {td_error:.3f}",
+    ]
+
+    y_pos = 1.0
+    for line in equation_lines:
+        fig.add_annotation(
+            x=0.02, y=y_pos, xref="paper", yref="paper",
+            text=line, showarrow=False,
+            font={"size": 11, "family": "monospace", "color": "white"},
+            xanchor="left", yanchor="top",
+            bgcolor="rgba(0,0,0,0.5)", bordercolor="#4488ff", borderwidth=1, borderpad=4,
+        )
+        y_pos -= 0.12
+
+    # Action info
+    action_names = ["Straight", "Right", "Left"]
+    fig.add_annotation(
+        x=0.98, y=0.98, xref="paper", yref="paper",
+        text=f"Action taken: {action_names[action]} ({action})<br>Greedy action: {action_names[greedy_action]} ({greedy_action})<br>Reward: {reward:.2f}<br>Terminated: {terminated}",
+        showarrow=False, font={"size": 10, "color": "white"},
+        xanchor="right", yanchor="top",
+        bgcolor="rgba(0,0,0,0.7)", bordercolor="#4488ff", borderwidth=1, borderpad=6,
+    )
+
+    # Next state
+    fig.add_trace(go.Bar(
+        x=next_state,
+        y=[f"s'[{i}]" for i in range(len(next_state))],
+        orientation="h",
+        marker_color="rgba(255,150,100,0.3)",
+        name="Next State s'",
+        showlegend=False,
+        hovertemplate="Next[%{y}]: %{x:.2f}<extra></extra>",
+    ))
+
+    fig.update_layout(
+        title={"text": "Bellman Update (Sampled Replay Transition)", "font": {"size": 11}},
+        barmode="overlay",
+        xaxis={"range": [-0.1, 1.1], "showgrid": True, "gridcolor": "rgba(128,128,128,0.15)"},
+        yaxis={"showgrid": False, "autorange": "reversed"},
+        height=350,
+        margin={"l": 80, "r": 20, "t": 45, "b": 40},
+        showlegend=True,
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
+    )
+
+    fig = apply_template(fig, height=350, uirevision="snake-bellman")
     return fig

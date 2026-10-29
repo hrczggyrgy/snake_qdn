@@ -196,7 +196,12 @@ def create_execution_fragment():
 
             # Episode Outcome Summary
             if ctl.agent and hasattr(ctl.agent, "termination_history"):
-                outcome_html = render_outcome_summary(ctl.agent.termination_history, window=50)
+                recent_terms = list(ctl.agent.recent_terminations) if hasattr(ctl.agent, "recent_terminations") else None
+                outcome_html = render_outcome_summary(
+                    ctl.agent.termination_history,
+                    window=50,
+                    recent_terminations=recent_terms,
+                )
                 if outcome_html:
                     st.markdown(outcome_html, unsafe_allow_html=True)
 

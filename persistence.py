@@ -15,7 +15,11 @@ import numpy as np
 import torch
 
 # Checkpoint schema version
-CHECKPOINT_VERSION = 2
+CHECKPOINT_VERSION = 3
+
+# Observation/reward schema version for compatibility checking
+OBSERVATION_SCHEMA_VERSION = 1
+REWARD_SCHEMA_VERSION = 1
 
 
 @dataclass
@@ -34,6 +38,23 @@ class ModelConfig:
             and self.output_size == other.output_size
             and self.dropout == other.dropout
         )
+
+
+@dataclass
+class EnvironmentState:
+    """Environment state for exact mid-episode resume."""
+
+    snake: list[tuple[int, int]]
+    food: tuple[int, int] | None
+    direction: int
+    score: int
+    steps_since_food: int
+    max_steps_without_food: int
+    grid_size: int
+    game_over: bool
+    # Instance-local RNG states
+    rng_state_python: Any
+    rng_state_numpy: Any
 
 
 @dataclass
@@ -56,6 +77,16 @@ class TrainingState:
     rng_state_torch: Any
     rng_state_cuda: Any | None = None
     termination_history: dict[str, int] | None = None
+    # Schema versions for compatibility
+    observation_schema_version: int = OBSERVATION_SCHEMA_VERSION
+    reward_schema_version: int = REWARD_SCHEMA_VERSION
+    # Environment state for mid-episode resume
+    environment_state: EnvironmentState | None = None
+    # Controller state
+    run_id: int = 0
+    episode_id: int = 0
+    step_id: int = 0
+    replay_warmed_up: bool = False
 
 
 def get_model_config(model: torch.nn.Module) -> ModelConfig:
@@ -230,8 +261,12 @@ def save_model_only(filepath: str, model: torch.nn.Module, model_config: ModelCo
 
 
 def load_model_only(filepath: str, model: torch.nn.Module, device: torch.device) -> ModelConfig:
-    """Load only model weights (for inference/deployment)."""
-    checkpoint = torch.load(filepath, map_location=device, weights_only=False)
+    """Load only model weights (for inference/deployment).
+
+    Uses weights_only=True for security since model-only checkpoints
+    contain only tensors and primitives, not arbitrary Python objects.
+    """
+    checkpoint = torch.load(filepath, map_location=device, weights_only=True)
 
     version = checkpoint.get("version", 1)
     if version > CHECKPOINT_VERSION:
@@ -247,7 +282,7 @@ def load_model_only(filepath: str, model: torch.nn.Module, device: torch.device)
 
 
 def capture_rng_state() -> tuple[Any, Any, Any, Any | None]:
-    """Capture current RNG state for all libraries."""
+    """Capture current global RNG state for all libraries."""
     import random
 
     python_state = random.getstate()
@@ -258,7 +293,7 @@ def capture_rng_state() -> tuple[Any, Any, Any, Any | None]:
 
 
 def restore_rng_state(python_state, numpy_state, torch_state, cuda_state) -> None:
-    """Restore RNG state for all libraries."""
+    """Restore global RNG state for all libraries."""
     import random
 
     random.setstate(python_state)
@@ -266,6 +301,17 @@ def restore_rng_state(python_state, numpy_state, torch_state, cuda_state) -> Non
     torch.set_rng_state(torch_state)
     if cuda_state is not None and torch.cuda.is_available():
         torch.cuda.set_rng_state_all(cuda_state)
+
+
+def capture_env_rng_state(env) -> tuple[Any, Any]:
+    """Capture environment-local RNG state."""
+    return env._rng.getstate(), env._np_rng.bit_generator.state
+
+
+def restore_env_rng_state(env, python_state, numpy_state) -> None:
+    """Restore environment-local RNG state."""
+    env._rng.setstate(python_state)
+    env._np_rng.bit_generator.state = numpy_state
 
 
 class CheckpointManager:
@@ -280,13 +326,63 @@ class CheckpointManager:
         self.agent = agent
         self.device = device
 
-    def save_full(self, filepath: str, atomic: bool = True) -> None:
-        """Save complete training state for exact resume."""
+    def save_full(self, filepath: str, env=None, atomic: bool = True,
+                  run_id: int = 0, episode_id: int = 0, step_id: int = 0,
+                  replay_warmed_up: bool = False) -> None:
+        """Save complete training state for exact resume.
+
+        Args:
+            filepath: Path to save checkpoint
+            env: Optional environment instance for mid-episode resume support
+            atomic: If True, write atomically via temp file
+            run_id: Current run ID from controller
+            episode_id: Current episode ID from controller
+            step_id: Current step ID from controller
+            replay_warmed_up: Whether replay buffer is ready
+        """
         # Capture RNG state
         rng_python, rng_numpy, rng_torch, rng_cuda = capture_rng_state()
 
-        # Capture replay buffer
-        memory_data = list(self.agent.memory.memory)
+        # Capture replay buffer (bounded for checkpoint size)
+        if hasattr(self.agent.memory, 'states'):
+            # New compact ReplayMemory
+            size = self.agent.memory.size
+            max_memory_items = min(50000, size)
+            start_idx = (self.agent.memory.position - size) % self.agent.memory.capacity
+            memory_data = []
+            for i in range(max_memory_items):
+                idx = (start_idx + i) % self.agent.memory.capacity
+                memory_data.append((
+                    self.agent.memory.states[idx].copy(),
+                    int(self.agent.memory.actions[idx]),
+                    float(self.agent.memory.rewards[idx]),
+                    self.agent.memory.next_states[idx].copy(),
+                    bool(self.agent.memory.terminated[idx]),
+                    bool(self.agent.memory.truncated[idx]),
+                ))
+        else:
+            # Old deque-based ReplayMemory
+            memory_data = list(self.agent.memory.memory)
+            max_memory_items = 50000
+            if len(memory_data) > max_memory_items:
+                memory_data = memory_data[-max_memory_items:]
+
+        # Capture environment state if provided
+        environment_state = None
+        if env is not None:
+            env_rng_python, env_rng_numpy = capture_env_rng_state(env)
+            environment_state = EnvironmentState(
+                snake=list(env.snake),
+                food=env.food,
+                direction=env.direction,
+                score=env.score,
+                steps_since_food=env.steps_since_food,
+                max_steps_without_food=env.max_steps_without_food,
+                grid_size=env.grid_size,
+                game_over=env.game_over,
+                rng_state_python=env_rng_python,
+                rng_state_numpy=env_rng_numpy,
+            )
 
         training_state = TrainingState(
             episode=self.agent.n_games,
@@ -297,7 +393,7 @@ class CheckpointManager:
             scores_history=self.agent.scores_history.copy(),
             mean_scores_history=self.agent.mean_scores_history.copy(),
             epsilon_history=self.agent.epsilon_history.copy(),
-            loss_history=self.agent.trainer.loss_history.copy(),
+            loss_history=self.agent.trainer.loss_history.copy()[-1000:],  # Bound loss history
             memory=memory_data,
             memory_position=self.agent.memory.position,
             rng_state_python=rng_python,
@@ -305,6 +401,11 @@ class CheckpointManager:
             rng_state_torch=rng_torch,
             rng_state_cuda=rng_cuda,
             termination_history=self.agent.termination_history.copy(),
+            environment_state=environment_state,
+            run_id=run_id,
+            episode_id=episode_id,
+            step_id=step_id,
+            replay_warmed_up=replay_warmed_up,
         )
 
         model_config = get_model_config(self.agent.model)
@@ -319,8 +420,17 @@ class CheckpointManager:
             atomic=atomic,
         )
 
-    def load_full(self, filepath: str, strict: bool = True) -> dict[str, Any]:
-        """Load complete training state for exact resume."""
+    def load_full(self, filepath: str, strict: bool = True, env=None) -> dict[str, Any]:
+        """Load complete training state for exact resume.
+
+        Args:
+            filepath: Path to checkpoint file
+            strict: If True, raise on architecture/schema mismatch
+            env: Optional environment instance to restore state into
+
+        Returns:
+            Checkpoint metadata dict including schema versions and controller state
+        """
         training_state, saved_config = load_checkpoint(
             filepath=filepath,
             model=self.agent.model,
@@ -329,6 +439,18 @@ class CheckpointManager:
             device=self.device,
             strict=strict,
         )
+
+        # Validate schema versions
+        if training_state.observation_schema_version != OBSERVATION_SCHEMA_VERSION:
+            raise ValueError(
+                f"Observation schema mismatch: checkpoint has v{training_state.observation_schema_version}, "
+                f"current is v{OBSERVATION_SCHEMA_VERSION}. Cannot resume."
+            )
+        if training_state.reward_schema_version != REWARD_SCHEMA_VERSION:
+            raise ValueError(
+                f"Reward schema mismatch: checkpoint has v{training_state.reward_schema_version}, "
+                f"current is v{REWARD_SCHEMA_VERSION}. Cannot resume."
+            )
 
         # Restore agent state
         self.agent.n_games = training_state.episode
@@ -347,17 +469,55 @@ class CheckpointManager:
             "victory": 0,
         }
 
-        # Restore replay buffer
-        self.agent.memory.memory = deque(training_state.memory, maxlen=self.agent.memory.capacity)
-        self.agent.memory.position = training_state.memory_position
-
-        # Restore RNG state
-        restore_rng_state(
-            training_state.rng_state_python,
-            training_state.rng_state_numpy,
-            training_state.rng_state_torch,
-            training_state.rng_state_cuda,
+        # Restore recent_terminations from termination_history (last 50)
+        self.agent.recent_terminations = deque(
+            [k for k, v in self.agent.termination_history.items() for _ in range(v)],
+            maxlen=50
         )
+
+        # Restore replay buffer
+        # Handle both old deque format and new compact format
+        memory_data = training_state.memory
+        if hasattr(self.agent.memory, 'states'):
+            # New compact ReplayMemory
+            self.agent.memory.size = min(len(memory_data), self.agent.memory.capacity)
+            self.agent.memory.position = training_state.memory_position % self.agent.memory.capacity
+            
+            for i, transition in enumerate(memory_data[:self.agent.memory.size]):
+                state, action, reward, next_state, terminated, truncated = transition
+                self.agent.memory.states[i] = state
+                self.agent.memory.actions[i] = action
+                self.agent.memory.rewards[i] = reward
+                self.agent.memory.next_states[i] = next_state
+                self.agent.memory.terminated[i] = terminated
+                self.agent.memory.truncated[i] = truncated
+        else:
+            # Old deque-based ReplayMemory (backward compatibility)
+            self.agent.memory.memory = deque(memory_data, maxlen=self.agent.memory.capacity)
+            self.agent.memory.position = training_state.memory_position
+
+        # Restore global RNG state (handle None for legacy checkpoints)
+        if training_state.rng_state_python is not None:
+            restore_rng_state(
+                training_state.rng_state_python,
+                training_state.rng_state_numpy,
+                training_state.rng_state_torch,
+                training_state.rng_state_cuda,
+            )
+
+        # Restore environment state if provided and available
+        if env is not None and training_state.environment_state is not None:
+            env_state = training_state.environment_state
+            env.snake = deque(env_state.snake)
+            env.food = env_state.food
+            env.direction = env_state.direction
+            env.score = env_state.score
+            env.steps_since_food = env_state.steps_since_food
+            env.max_steps_without_food = env_state.max_steps_without_food
+            env.grid_size = env_state.grid_size
+            env.game_over = env_state.game_over
+            if env_state.rng_state_python is not None:
+                restore_env_rng_state(env, env_state.rng_state_python, env_state.rng_state_numpy)
 
         return {
             "episode": training_state.episode,
@@ -366,6 +526,12 @@ class CheckpointManager:
             "avg_score": training_state.mean_scores_history[-1]
             if training_state.mean_scores_history
             else 0.0,
+            "run_id": training_state.run_id,
+            "episode_id": training_state.episode_id,
+            "step_id": training_state.step_id,
+            "replay_warmed_up": training_state.replay_warmed_up,
+            "observation_schema_version": training_state.observation_schema_version,
+            "reward_schema_version": training_state.reward_schema_version,
         }
 
     def save_weights_only(self, filepath: str) -> None:

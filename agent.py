@@ -22,18 +22,28 @@ from snake_env import SnakeGameAI
 
 
 class ReplayMemory:
-    """Experience Replay Buffer with efficient sampling.
+    """Compact Experience Replay Buffer using preallocated arrays.
 
     Stores terminated flag separately from truncated for correct
     bootstrapping in Q-learning (terminated suppresses bootstrap).
+    
+    Uses circular buffer with preallocated numpy arrays for efficient
+    storage and sampling.
     """
 
-    def __init__(self, capacity: int = 100_000):
+    def __init__(self, capacity: int = 100_000, state_dim: int = 11):
         self.capacity = capacity
-        self.memory: deque[tuple[np.ndarray, int, float, np.ndarray, bool, bool]] = deque(
-            maxlen=capacity
-        )
+        self.state_dim = state_dim
+        self.size = 0
         self.position = 0
+
+        # Preallocate arrays
+        self.states: np.ndarray = np.zeros((capacity, state_dim), dtype=np.float32)
+        self.actions: np.ndarray = np.zeros(capacity, dtype=np.int64)
+        self.rewards: np.ndarray = np.zeros(capacity, dtype=np.float32)
+        self.next_states: np.ndarray = np.zeros((capacity, state_dim), dtype=np.float32)
+        self.terminated: np.ndarray = np.zeros(capacity, dtype=bool)
+        self.truncated: np.ndarray = np.zeros(capacity, dtype=bool)
 
     def push(
         self,
@@ -50,7 +60,15 @@ class ReplayMemory:
             terminated: True if episode ended due to game-over (wall/self collision)
             truncated: True if episode ended due to external limit (timeout)
         """
-        self.memory.append((state, action, reward, next_state, terminated, truncated))
+        self.states[self.position] = state
+        self.actions[self.position] = action
+        self.rewards[self.position] = reward
+        self.next_states[self.position] = next_state
+        self.terminated[self.position] = terminated
+        self.truncated[self.position] = truncated
+
+        self.position = (self.position + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
 
     def sample(self, batch_size: int) -> tuple[np.ndarray, ...]:
         """Sample random batch from memory.
@@ -58,22 +76,21 @@ class ReplayMemory:
         Returns:
             states, actions, rewards, next_states, terminated, truncated
         """
-        batch = random.sample(self.memory, batch_size)
-        states, actions, rewards, next_states, terminated, truncated = zip(*batch, strict=True)
+        indices = np.random.randint(0, self.size, size=batch_size)
         return (
-            np.array(states, dtype=np.float32),
-            np.array(actions, dtype=np.int64),
-            np.array(rewards, dtype=np.float32),
-            np.array(next_states, dtype=np.float32),
-            np.array(terminated, dtype=bool),
-            np.array(truncated, dtype=bool),
+            self.states[indices],
+            self.actions[indices],
+            self.rewards[indices],
+            self.next_states[indices],
+            self.terminated[indices],
+            self.truncated[indices],
         )
 
     def __len__(self) -> int:
-        return len(self.memory)
+        return self.size
 
     def is_ready(self, batch_size: int) -> bool:
-        return len(self.memory) >= batch_size
+        return self.size >= batch_size
 
 
 class Agent:
@@ -98,13 +115,18 @@ class Agent:
         epsilon_end: float = 0.01,
         epsilon_decay: float = 0.995,
         memory_size: int = 100_000,
-        batch_size: int = 1000,
-        target_update_freq: int = 10,
+        batch_size: int = 256,
+        tau: float = 0.005,
+        dropout: float = 0.1,
         device: str = "auto",
+        learning_starts: int = 1000,
+        train_every: int = 1,
+        gradient_steps: int = 1,
+        epsilon_decay_steps: int = 0,  # If > 0, use step-based epsilon decay
     ):
         # Model and trainer
-        self.model = Linear_QNet(input_size, hidden_size, output_size)
-        self.trainer = QTrainer(self.model, lr=lr, gamma=gamma, device=device)
+        self.model = Linear_QNet(input_size, hidden_size, output_size, dropout=dropout)
+        self.trainer = QTrainer(self.model, lr=lr, gamma=gamma, tau=tau, device=device)
 
         # Hyperparameters
         self.gamma = gamma
@@ -113,10 +135,18 @@ class Agent:
         self.epsilon_end = epsilon_end
         self.epsilon_decay = epsilon_decay
         self.batch_size = batch_size
-        self.target_update_freq = target_update_freq
+        self.tau = tau
+        self.dropout = dropout
+
+        # Replay schedule (unified)
+        self.learning_starts = learning_starts
+        self.train_every = train_every
+        self.gradient_steps = gradient_steps
+        self.epsilon_decay_steps = epsilon_decay_steps
+        self._transitions_since_train = 0
 
         # Memory
-        self.memory = ReplayMemory(memory_size)
+        self.memory = ReplayMemory(memory_size, state_dim=input_size)
 
         # Training stats
         self.n_games = 0
@@ -126,36 +156,47 @@ class Agent:
         self.mean_scores_history: list[float] = []
         self.epsilon_history: list[float] = []
         self.loss_history: list[float] = []
+        # Lifetime termination totals
         self.termination_history: dict[str, int] = {
             "wall": 0,
             "self": 0,
             "timeout": 0,
             "victory": 0,
         }
+        # Recent episode outcomes for display (bounded window)
+        self.recent_terminations: deque[str] = deque(maxlen=50)
+
+        # Bellman update details for visualization (last sampled replay transition)
+        self._last_bellman_details: dict | None = None
 
         # For step-by-step mode
         self.last_state: np.ndarray | None = None
         self.last_action: int | None = None
 
     def _select_action(
-        self, state: np.ndarray, training: bool = True
-    ) -> tuple[int, str, np.ndarray]:
+        self, state: np.ndarray, training: bool = True, compute_q_values: bool = True
+    ) -> tuple[int, str, np.ndarray | None]:
         """
         Core epsilon-greedy action selection.
 
         Args:
             state: Current observation (11,)
             training: If True, use epsilon-greedy. If False, greedy.
+            compute_q_values: If False, skip Q-value computation (for fast training).
+                             Returns None for q_values.
 
         Returns:
-            Tuple of (action_index, reason, q_values)
+            Tuple of (action_index, reason, q_values_or_None)
         """
         if training and random.random() < self.epsilon:
-            # Exploration: random action, still compute Q-values for diagnostics
-            q_values = self.trainer.get_q_values(state)
+            # Exploration: random action
+            if compute_q_values:
+                q_values = self.trainer.get_q_values(state)
+            else:
+                q_values = None
             return random.randint(0, 2), "exploring", q_values
 
-        # Exploitation: greedy action
+        # Exploitation: greedy action (always needs Q-values)
         q_values = self.trainer.get_q_values(state)
         return int(np.argmax(q_values)), "exploiting", q_values
 
@@ -188,8 +229,8 @@ class Agent:
         return action, reason
 
     def get_action_with_q_values(
-        self, state: np.ndarray, training: bool = True
-    ) -> tuple[int, str, np.ndarray]:
+        self, state: np.ndarray, training: bool = True, compute_q_values: bool = True
+    ) -> tuple[int, str, np.ndarray | None]:
         """
         Epsilon-greedy action selection with reason and Q-values.
 
@@ -199,11 +240,12 @@ class Agent:
         Args:
             state: Current observation (11,)
             training: If True, use epsilon-greedy. If False, greedy.
+            compute_q_values: If False, skip Q-value computation during exploration.
 
         Returns:
-            Tuple of (action_index, reason, q_values)
+            Tuple of (action_index, reason, q_values_or_None)
         """
-        return self._select_action(state, training)
+        return self._select_action(state, training, compute_q_values)
 
     def get_action_probs(self, state: np.ndarray) -> np.ndarray:
         """Get action probabilities for visualization."""
@@ -253,7 +295,7 @@ class Agent:
         return loss  # type: ignore
 
     def train_long_memory(self) -> float | None:
-        """Train on batch from replay memory."""
+        """Train on batch from replay memory (legacy method, use maybe_optimize for unified schedule)."""
         if not self.memory.is_ready(self.batch_size):
             return None
 
@@ -270,9 +312,78 @@ class Agent:
         loss = self.trainer.train_step(states_t, actions_t, rewards_t, next_states_t, terminated_t)
         return loss  # type: ignore
 
+    def maybe_optimize(self) -> list[float]:
+        """
+        Unified optimization step following replay schedule.
+
+        Returns:
+            List of loss values from each gradient step (empty if no training occurred)
+        """
+        losses: list[float] = []
+        self._last_bellman_details = None
+
+        # Check if we should train this transition
+        self._transitions_since_train += 1
+        if self._transitions_since_train < self.train_every:
+            return losses
+
+        self._transitions_since_train = 0
+
+        # Check if replay has enough samples (need at least max(learning_starts, batch_size))
+        min_samples = max(self.learning_starts, self.batch_size)
+        if len(self.memory) < min_samples:
+            return losses
+
+        # Perform gradient_steps optimizer updates
+        for i in range(self.gradient_steps):
+            states, actions, rewards, next_states, terminated, truncated = self.memory.sample(
+                self.batch_size
+            )
+
+            states_t = torch.FloatTensor(states)
+            actions_t = torch.LongTensor(actions)
+            rewards_t = torch.FloatTensor(rewards)
+            next_states_t = torch.FloatTensor(next_states)
+            terminated_t = torch.BoolTensor(terminated)
+
+            # Capture Bellman details on the last gradient step for visualization
+            if i == self.gradient_steps - 1:
+                loss, details = self.trainer.train_step(
+                    states_t, actions_t, rewards_t, next_states_t, terminated_t,
+                    capture_details=True
+                )
+                self._last_bellman_details = details
+            else:
+                loss = self.trainer.train_step(
+                    states_t, actions_t, rewards_t, next_states_t, terminated_t,
+                    capture_details=False
+                )
+            losses.append(loss)  # type: ignore
+
+        return losses
+
+    def get_last_bellman_details(self) -> dict | None:
+        """Get Bellman update details from last optimization step for visualization."""
+        return self._last_bellman_details
+
     def decay_epsilon(self) -> None:
-        """Decay exploration rate."""
+        """Decay exploration rate (per-episode decay - legacy)."""
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
+
+    def decay_epsilon_by_steps(self, training_transitions: int, decay_steps: int) -> None:
+        """
+        Decay exploration rate based on training transition count.
+        
+        Uses linear decay from epsilon_start to epsilon_end over decay_steps.
+        
+        Args:
+            training_transitions: Number of training transitions completed
+            decay_steps: Total transitions over which to decay epsilon
+        """
+        if decay_steps <= 0:
+            return
+        progress = min(1.0, training_transitions / decay_steps)
+        self.epsilon = self.epsilon_start + (self.epsilon_end - self.epsilon_start) * progress
 
     def update_stats(
         self, score: int, loss: float | None = None, termination_reason: str | None = None
@@ -299,14 +410,33 @@ class Agent:
         if loss is not None:
             self.loss_history.append(loss)
 
-        # Track termination reason
+        # Track termination reason - both lifetime and recent window
         if termination_reason and termination_reason in self.termination_history:
             self.termination_history[termination_reason] += 1
+            self.recent_terminations.append(termination_reason)
 
-    def save_checkpoint(self, filepath: str) -> None:
-        """Save agent checkpoint (backward compatible - saves training state)."""
+    def save_checkpoint(self, filepath: str, env=None, run_id: int = 0, episode_id: int = 0,
+                       step_id: int = 0, replay_warmed_up: bool = False) -> None:
+        """Save agent checkpoint with optional environment state for exact resume.
+
+        Args:
+            filepath: Path to save checkpoint
+            env: Optional environment instance for mid-episode resume support.
+                 If provided, captures environment state and local RNG.
+            run_id: Current run ID from controller
+            episode_id: Current episode ID from controller
+            step_id: Current step ID from controller
+            replay_warmed_up: Whether replay buffer is ready
+        """
         manager = CheckpointManager(self, self.trainer.device)
-        manager.save_full(filepath)
+        manager.save_full(
+            filepath,
+            env=env,
+            run_id=run_id,
+            episode_id=episode_id,
+            step_id=step_id,
+            replay_warmed_up=replay_warmed_up,
+        )
 
     def load_checkpoint(self, filepath: str) -> dict[str, Any]:
         """Load agent checkpoint (backward compatible - loads training state)."""
@@ -340,16 +470,35 @@ class Agent:
         }
 
     def reset_stats(self) -> None:
-        """Reset training statistics (keep model weights)."""
-        self.n_games = 0
-        self.total_steps = 0
-        self.high_score = 0
+        """Reset display statistics only (keep lifetime counters, model, replay, optimizer, epsilon).
+
+        Clears:
+        - scores_history, mean_scores_history, epsilon_history, loss_history
+        - termination_history (lifetime totals)
+        - recent_terminations (recent window)
+
+        Preserves:
+        - n_games (lifetime episode count)
+        - total_steps (lifetime transition count)
+        - high_score (lifetime best)
+        - epsilon (current exploration rate)
+        - trainer.loss_history, trainer.training_step
+        - replay memory
+        """
         self.scores_history = []
         self.mean_scores_history = []
         self.epsilon_history = []
         self.loss_history = []
-        self.trainer.loss_history = []
-        self.trainer.training_step = 0
+        self.termination_history = {
+            "wall": 0,
+            "self": 0,
+            "timeout": 0,
+            "victory": 0,
+        }
+        self.recent_terminations.clear()
+        # Note: n_games, total_steps, high_score, epsilon are NOT reset
+        # Note: trainer.loss_history and trainer.training_step are NOT reset
+        # Note: replay memory is NOT cleared
 
 
 def train_agent(
@@ -357,20 +506,18 @@ def train_agent(
     env: SnakeGameAI,
     n_episodes: int = 1000,
     max_steps_per_episode: int = 2000,
-    render_every: int = 0,
     save_every: int = 100,
     save_path: str = "checkpoints/snake_dqn.pth",
     callback=None,
 ) -> dict[str, list]:
     """
-    Main training loop.
+    Main training loop (backward-compatible wrapper using TrainingController).
 
     Args:
         agent: DQN Agent
         env: Snake Environment
         n_episodes: Number of episodes to train
         max_steps_per_episode: Maximum steps per episode
-        render_every: Render every N episodes (0 = never)
         save_every: Save checkpoint every N episodes
         save_path: Path to save checkpoints
         callback: Optional callback function(episode, stats) for progress tracking
@@ -378,71 +525,23 @@ def train_agent(
     Returns:
         Dictionary with training history
     """
-    os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else ".", exist_ok=True)
+    from training import TrainingController, train_headless, ActivityMode
 
-    for episode in range(n_episodes):
-        state, _ = env.reset()
-        episode_reward = 0.0
-        episode_loss = []
+    # Create controller with agent's config
+    controller = TrainingController()
+    controller._agent = agent
+    controller._env = env
+    controller.set_mode(ActivityMode.TRAIN)
+    controller.set_paused(False)
 
-        for _step in range(max_steps_per_episode):
-            # Get action
-            action = agent.get_action(state, training=True)
-
-            # Step environment
-            next_state, reward, terminated, truncated, info = env.step(action)
-            done = terminated or truncated
-
-            # Store in memory (terminated controls bootstrap, done controls episode end)
-            agent.remember(state, action, reward, next_state, terminated, truncated)
-
-            # Train short memory (immediate) - use terminated for bootstrap mask
-            loss = agent.train_short_memory(state, action, reward, next_state, terminated)
-            if loss:
-                episode_loss.append(loss)
-
-            # Train long memory (replay)
-            replay_loss = agent.train_long_memory()
-            if replay_loss:
-                episode_loss.append(replay_loss)
-
-            state = next_state
-            episode_reward += reward
-            agent.total_steps += 1
-
-            if done:
-                break
-
-        # Decay epsilon
-        agent.decay_epsilon()
-
-        # Update stats
-        avg_loss = np.mean(episode_loss) if episode_loss else None
-        agent.update_stats(info["score"], avg_loss)
-
-        # Callback for progress
-        if callback:
-            callback(episode, agent.get_training_stats())
-
-        # Save checkpoint
-        if save_every > 0 and (episode + 1) % save_every == 0:
-            agent.save_checkpoint(save_path)
-            loss_text = f"{avg_loss:.4f}" if avg_loss is not None else "N/A"
-            print(
-                f"Episode {episode + 1}: Score={info['score']}, "
-                f"Avg(50)={agent.mean_scores_history[-1]:.2f}, "
-                f"Epsilon={agent.epsilon:.3f}, Loss={loss_text}"
-            )
-
-    # Final save
-    agent.save_checkpoint(save_path)
-
-    return {
-        "scores": agent.scores_history,
-        "mean_scores": agent.mean_scores_history,
-        "epsilon": agent.epsilon_history,
-        "loss": agent.loss_history,
-    }
+    return train_headless(
+        controller=controller,
+        n_episodes=n_episodes,
+        max_steps_per_episode=max_steps_per_episode,
+        save_every=save_every,
+        save_path=save_path,
+        callback=callback,
+    )
 
 
 def evaluate_agent(

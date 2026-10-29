@@ -32,6 +32,11 @@ class SnakeGameAI:
     - Eating food: +10
     - Game Over: -10
     - Step penalty: -0.01 (configurable)
+
+    Collision Rules:
+    - allow_tail_entry: If True, moving into the tail cell is allowed when the snake
+      doesn't grow that step (tail moves away). This is the standard Snake rule.
+      If False, the tail cell is always treated as collision.
     """
 
     def __init__(
@@ -42,12 +47,14 @@ class SnakeGameAI:
         death_penalty: float = -10.0,
         render_mode: str | None = None,
         seed: int | None = None,
+        allow_tail_entry: bool = True,
     ):
         self.grid_size = grid_size
         self.step_penalty = step_penalty
         self.food_reward = food_reward
         self.death_penalty = death_penalty
         self.render_mode = render_mode
+        self.allow_tail_entry = allow_tail_entry
 
         # Instance-local random generators for RNG isolation
         self._rng = random.Random()
@@ -76,6 +83,9 @@ class SnakeGameAI:
 
         # food can be None when board is full (victory)
         self.food: tuple[int, int] | None = None
+
+        # Precompute empty cells for efficient food placement
+        self._empty_cells: list[tuple[int, int]] = []
 
         self.reset()
 
@@ -110,6 +120,8 @@ class SnakeGameAI:
         self.steps_since_food = 0
         self.max_steps_without_food = self.grid_size * self.grid_size  # Prevent infinite loops
 
+        # Rebuild empty cells and place food
+        self._rebuild_empty_cells()
         self._place_food()
         self.game_over = False
 
@@ -118,16 +130,26 @@ class SnakeGameAI:
 
         return observation, info
 
-    def _place_food(self) -> None:
-        """Place food at random empty position using instance-local RNG."""
-        empty_cells = [
+    def _rebuild_empty_cells(self) -> None:
+        """Rebuild the list of empty cells for efficient food placement."""
+        snake_set = set(self.snake)
+        self._empty_cells = [
             (x, y)
             for x in range(self.grid_size)
             for y in range(self.grid_size)
-            if (x, y) not in self.snake
+            if (x, y) not in snake_set
         ]
-        if empty_cells:
-            self.food = self._rng.choice(empty_cells)
+
+    def _place_food(self) -> None:
+        """Place food at random empty position using instance-local RNG."""
+        # Rebuild empty cells if snake was manually modified (fallback for tests)
+        if not hasattr(self, '_empty_cells') or len(self._empty_cells) + len(self.snake) != self.grid_size * self.grid_size:
+            self._rebuild_empty_cells()
+        
+        if self._empty_cells:
+            self.food = self._rng.choice(self._empty_cells)
+            # Remove food position from empty cells
+            self._empty_cells.remove(self.food)
         else:
             # Board is full - snake has won (filled entire grid)
             # This is a terminal success state
@@ -146,9 +168,14 @@ class SnakeGameAI:
 
         Returns:
             observation, reward, terminated, truncated, info
+            info includes "termination_reason" when episode ends (one of: "wall", "self", "timeout", "victory")
         """
         if self.game_over:
             return self._get_observation(), 0.0, True, False, self._get_info()
+
+        # Validate action
+        if action not in (0, 1, 2):
+            raise ValueError(f"Invalid action: {action}. Must be 0 (straight), 1 (right), or 2 (left).")
 
         # Update direction based on action
         self._update_direction(action)
@@ -164,6 +191,7 @@ class SnakeGameAI:
         reward = self.step_penalty
         terminated = False
         truncated = False
+        termination_reason = None
 
         # Wall collision
         if (
@@ -175,17 +203,31 @@ class SnakeGameAI:
             reward = self.death_penalty
             terminated = True
             self.game_over = True
+            termination_reason = "wall"
 
-        # Self collision
+        # Self collision (with tail entry rule)
         elif new_head in self.snake:
-            reward = self.death_penalty
-            terminated = True
-            self.game_over = True
+            # Allow entering the tail cell if it will move away (snake not growing)
+            tail = self.snake[-1]
+            will_grow = (self.food is not None and new_head == self.food)
+            
+            if self.allow_tail_entry and new_head == tail and not will_grow:
+                # Tail entry allowed - treat as valid move
+                pass
+            else:
+                reward = self.death_penalty
+                terminated = True
+                self.game_over = True
+                termination_reason = "self"
 
-        else:
+        if not terminated:
             # Valid move
             self.snake.appendleft(new_head)
             self.steps_since_food += 1
+
+            # Update empty cells: head occupies new cell
+            if new_head in self._empty_cells:
+                self._empty_cells.remove(new_head)
 
             # Check food
             if new_head == self.food:
@@ -199,17 +241,26 @@ class SnakeGameAI:
                     terminated = True
                     self.game_over = True
                     reward += self.food_reward  # Bonus for winning
+                    termination_reason = "victory"
             else:
-                self.snake.pop()  # Remove tail
+                # Remove tail and add it back to empty cells
+                tail = self.snake.pop()
+                self._empty_cells.append(tail)
 
             # Truncation: too many steps without food (time limit)
             if self.steps_since_food >= self.max_steps_without_food:
                 truncated = True
                 reward = self.death_penalty
                 self.game_over = True
+                termination_reason = "timeout"
+                reward = self.death_penalty
+                self.game_over = True
+                termination_reason = "timeout"
 
         observation = self._get_observation()
         info = self._get_info()
+        if termination_reason is not None:
+            info["termination_reason"] = termination_reason
 
         return observation, reward, terminated, truncated, info
 

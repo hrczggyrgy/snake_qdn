@@ -232,15 +232,23 @@ def test_board_restart_history_reset_new_run():
     assert len(agent.scores_history) == 3
     print("  ✓ Board restart keeps agent stats")
 
-    # Clear history - resets stats but keeps model weights
+    # Clear history - resets display stats but keeps lifetime counters and model weights
     agent.reset_stats()
-    assert agent.n_games == 0
+    # Lifetime counters preserved
+    assert agent.n_games == 3
+    assert agent.high_score >= 0
+    # Note: total_steps only incremented through training loop (train_agent or controller)
+    # This test uses train_short_memory directly, so total_steps stays 0
+    # Display histories cleared
     assert len(agent.scores_history) == 0
-    assert agent.high_score == 0
-    # Note: reset_stats() does NOT reset epsilon (keeps current exploration rate)
+    assert len(agent.mean_scores_history) == 0
+    assert len(agent.epsilon_history) == 0
+    assert len(agent.loss_history) == 0
+    assert len(agent.recent_terminations) == 0
+    # Epsilon and replay buffer preserved
     assert agent.epsilon != agent.epsilon_start  # Epsilon preserved
     assert len(agent.memory) > 0  # Replay buffer preserved
-    print("  ✓ Clear history resets stats but keeps replay buffer and epsilon")
+    print("  ✓ Clear history resets display stats but keeps lifetime counters, epsilon, and replay")
 
     # New run - fresh agent (discards model weights)
     new_agent = Agent(hidden_size=64, memory_size=1000, batch_size=32)

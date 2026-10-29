@@ -171,7 +171,8 @@ class QTrainer:
         rewards: torch.Tensor,
         next_states: torch.Tensor,
         terminated: torch.Tensor,
-    ) -> float:
+        capture_details: bool = False,
+    ) -> float | tuple[float, dict]:
         """
         Perform one training step using Bellman equation.
 
@@ -183,9 +184,12 @@ class QTrainer:
             terminated: Batch of terminated flags (batch_size,)
                        True = game over (suppress bootstrap)
                        False = continue or truncated (keep bootstrap)
+            capture_details: If True, return Bellman update details for first transition
 
         Returns:
-            Loss value
+            Loss value, or (loss, details_dict) if capture_details=True
+            details_dict contains: state, action, reward, next_state, terminated,
+            current_q, target_q, td_error, target_q_max, greedy_action
         """
         self.model.train()
 
@@ -197,8 +201,8 @@ class QTrainer:
         terminated = terminated.to(self.device)
 
         # Current Q-values: Q(s, a)
-        current_q_values = self.model(states)
-        current_q_values = current_q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
+        all_q_values = self.model(states)
+        current_q_values = all_q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
 
         # Target Q-values: r + gamma * max_a' Q'(s', a') * (1 - terminated)
         # Only suppress bootstrap on actual termination, not truncation
@@ -206,6 +210,7 @@ class QTrainer:
             next_q_values = self.target_model(next_states)
             max_next_q_values = next_q_values.max(1)[0]
             target_q_values = rewards + (self.gamma * max_next_q_values * (1 - terminated.float()))
+            greedy_actions = next_q_values.argmax(1)
 
         # Compute loss
         loss = self.criterion(current_q_values, target_q_values)
@@ -223,6 +228,24 @@ class QTrainer:
         self.training_step += 1
         loss_val: float = loss.item()
         self.loss_history.append(loss_val)
+
+        if capture_details:
+            # Capture details for the first transition in batch
+            details = {
+                "state": states[0].detach().cpu().numpy(),
+                "action": int(actions[0].item()),
+                "reward": float(rewards[0].item()),
+                "next_state": next_states[0].detach().cpu().numpy(),
+                "terminated": bool(terminated[0].item()),
+                "current_q": all_q_values[0].detach().cpu().numpy(),
+                "current_q_taken": float(current_q_values[0].item()),
+                "target_q": float(target_q_values[0].item()),
+                "td_error": float((target_q_values[0] - current_q_values[0]).item()),
+                "target_q_max": float(max_next_q_values[0].item()),
+                "greedy_action": int(greedy_actions[0].item()),
+                "gamma": self.gamma,
+            }
+            return loss_val, details
 
         return loss_val
 
@@ -301,45 +324,6 @@ class QTrainer:
             "high_score": checkpoint.get("high_score", 0),
             "avg_score": checkpoint.get("avg_score", 0.0),
         }
-
-
-class Dueling_QNet(nn.Module):
-    """
-    Dueling DQN Architecture (optional enhancement).
-    Separates value and advantage streams.
-    """
-
-    def __init__(self, input_size: int = 11, hidden_size: int = 256, output_size: int = 3):
-        super().__init__()
-
-        # Shared feature layers
-        self.feature = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-        )
-
-        # Value stream
-        self.value_stream = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2), nn.ReLU(), nn.Linear(hidden_size // 2, 1)
-        )
-
-        # Advantage stream
-        self.advantage_stream = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),
-            nn.ReLU(),
-            nn.Linear(hidden_size // 2, output_size),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        features = self.feature(x)
-        value = self.value_stream(features)
-        advantage = self.advantage_stream(features)
-
-        # Combine: Q = V + (A - mean(A))
-        q_values = value + (advantage - advantage.mean(dim=1, keepdim=True))
-        return q_values
 
 
 if __name__ == "__main__":

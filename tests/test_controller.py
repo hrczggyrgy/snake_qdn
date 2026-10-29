@@ -109,7 +109,7 @@ class TestTrainingController:
         assert controller.step_id == 0
 
     def test_clear_history(self):
-        """Test clear_history resets stats but keeps model."""
+        """Test clear_history resets display stats but keeps model and lifetime counters."""
         controller = TrainingController()
         controller.set_mode(ActivityMode.TRAIN)
         controller.set_paused(False)
@@ -124,13 +124,21 @@ class TestTrainingController:
 
         assert controller.episode == 3
         assert len(controller.agent.scores_history) == 3
+        high_score_before = controller.agent.high_score
+        total_steps_before = controller.agent.total_steps
+        training_step_before = controller.agent.trainer.training_step
 
-        # Clear history
+        # Clear history (display only)
         controller.clear_history()
 
         assert controller.episode == 0
         assert len(controller.agent.scores_history) == 0
-        assert controller.agent.high_score == 0
+        # Lifetime counters preserved
+        assert controller.agent.high_score == high_score_before
+        assert controller.agent.total_steps == total_steps_before
+        assert controller.agent.trainer.training_step == training_step_before
+        # Epsilon preserved
+        assert controller.agent.epsilon > 0
         # Model weights preserved (can still act)
         action = controller.agent.get_action(controller.observation, training=False)
         assert 0 <= action <= 2

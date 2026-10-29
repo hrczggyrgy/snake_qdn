@@ -207,7 +207,7 @@ class TestAgent:
         # This test just verifies agent's loss_history is updated
 
     def test_reset_stats(self):
-        """Test reset_stats clears statistics but keeps model."""
+        """Test reset_stats clears display statistics but keeps lifetime counters and model."""
         agent = Agent(hidden_size=64, memory_size=1000, batch_size=32)
 
         # Build some history
@@ -218,19 +218,26 @@ class TestAgent:
         assert agent.n_games == 3
         assert len(agent.scores_history) == 3
         assert len(agent.memory) == 0  # No experiences added yet
+        high_score_before = agent.high_score
+        epsilon_before = agent.epsilon
 
         agent.reset_stats()
 
-        assert agent.n_games == 0
+        # Lifetime counters preserved
+        assert agent.n_games == 3
+        assert agent.high_score == high_score_before
+        assert agent.epsilon == epsilon_before
+        # Display histories cleared
         assert len(agent.scores_history) == 0
-        assert agent.high_score == 0
         assert len(agent.mean_scores_history) == 0
         assert len(agent.epsilon_history) == 0
         assert len(agent.loss_history) == 0
-        assert agent.trainer.loss_history == []
-        assert agent.trainer.training_step == 0
-        # Epsilon should be preserved
-        assert agent.epsilon != 1.0  # Not reset to start
+        assert len(agent.recent_terminations) == 0
+        # Trainer state preserved
+        assert agent.trainer.training_step == 0  # Not stepped yet in this test
+        # Model weights preserved (can still act)
+        action = agent.get_action(np.random.randn(11), training=False)
+        assert 0 <= action <= 2
 
 
 class TestCheckpoint:

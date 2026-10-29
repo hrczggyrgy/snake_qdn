@@ -119,6 +119,9 @@ class TrainingSnapshot:
     # Events (recent, for UI)
     recent_events: list[TrainingEvent] = field(default_factory=list)
 
+    # Bellman update explanation (sampled replay transition)
+    bellman_details: dict | None = None
+
     def __post_init__(self):
         # Ensure arrays are copied (frozen dataclass doesn't deep-copy numpy arrays)
         object.__setattr__(
@@ -174,10 +177,16 @@ class AgentConfig:
     epsilon_end: float = 0.01
     epsilon_decay: float = 0.995
     memory_size: int = 100_000
-    batch_size: int = 1000
-    target_update_freq: int = 10
+    batch_size: int = 256
+    tau: float = 0.005  # Soft target update parameter
     device: str = "auto"
     dropout: float = 0.1
+    # Replay schedule (replaces dual-update loop)
+    learning_starts: int = 1000  # Transitions before training begins
+    train_every: int = 1         # Train every N environment transitions
+    gradient_steps: int = 1      # Optimizer steps per training call
+    # Exploration schedule
+    epsilon_decay_steps: int = 0  # If > 0, use step-based decay over this many training transitions
 
     def __post_init__(self):
         if self.hidden_size <= 0:
@@ -200,6 +209,18 @@ class AgentConfig:
             raise ValueError(
                 f"batch_size ({self.batch_size}) must be <= memory_size ({self.memory_size})"
             )
+        if not 0.0 < self.tau <= 1.0:
+            raise ValueError(f"tau must be in (0, 1], got {self.tau}")
+        if not 0.0 <= self.dropout < 1.0:
+            raise ValueError(f"dropout must be in [0, 1), got {self.dropout}")
+        if self.learning_starts < 0:
+            raise ValueError(f"learning_starts must be >= 0, got {self.learning_starts}")
+        if self.train_every <= 0:
+            raise ValueError(f"train_every must be > 0, got {self.train_every}")
+        if self.gradient_steps <= 0:
+            raise ValueError(f"gradient_steps must be > 0, got {self.gradient_steps}")
+        if self.epsilon_decay_steps < 0:
+            raise ValueError(f"epsilon_decay_steps must be >= 0, got {self.epsilon_decay_steps}")
 
 
 class TrainingController:
@@ -249,10 +270,17 @@ class TrainingController:
 
         # Performance metrics (Phase 1)
         self._metrics: dict[str, float | int | bool | None] = {
-            "transitions": 0,
+            # Environment transitions (agent-environment interactions)
+            "env_transitions": 0,
+            # Training transitions (experiences stored in replay)
+            "training_transitions": 0,
+            # Optimizer updates (trainer.training_step)
             "optimizer_updates": 0,
             "episodes_completed": 0,
-            "total_training_time": 0.0,
+            # Wall-clock time since first transition (includes pauses)
+            "total_session_time": 0.0,
+            # Active execution time (excludes pauses between steps)
+            "active_execution_time": 0.0,
             "replay_buffer_size": 0,
             "replay_active": False,
             "time_action_selection": 0.0,
@@ -260,8 +288,9 @@ class TrainingController:
             "time_optimization": 0.0,
             "time_diagnostics": 0.0,
             "time_display_prep": 0.0,
-            "start_time": None,
+            "session_start_time": None,
             "last_transition_time": None,
+            "_prev_optimizer_step": 0,  # Internal: for delta tracking
         }
 
         # Event system
@@ -402,18 +431,47 @@ class TrainingController:
     def get_metrics(self) -> dict[str, float | int | bool]:
         """Get current performance metrics (copy for isolation)."""
         metrics = self._metrics.copy()
+        # Remove internal tracking field
+        metrics.pop("_prev_optimizer_step", None)
         # Add derived rates
-        elapsed = metrics.get("total_training_time", 0.0)
-        if isinstance(elapsed, (int, float)) and elapsed > 0:
-            transitions = metrics.get("transitions", 0)
+        elapsed_session = metrics.get("total_session_time", 0.0)
+        elapsed_active = metrics.get("active_execution_time", 0.0)
+        if isinstance(elapsed_session, (int, float)) and elapsed_session > 0:
+            env_transitions = metrics.get("env_transitions", 0)
+            training_transitions = metrics.get("training_transitions", 0)
             optimizer_updates = metrics.get("optimizer_updates", 0)
-            if isinstance(transitions, (int, float)):
-                metrics["transitions_per_sec"] = transitions / elapsed
+            if isinstance(env_transitions, (int, float)):
+                metrics["env_transitions_per_sec_session"] = env_transitions / elapsed_session
+            if isinstance(training_transitions, (int, float)):
+                metrics["training_transitions_per_sec_session"] = training_transitions / elapsed_session
             if isinstance(optimizer_updates, (int, float)):
-                metrics["optimizer_updates_per_sec"] = optimizer_updates / elapsed
+                metrics["optimizer_updates_per_sec_session"] = optimizer_updates / elapsed_session
         else:
-            metrics["transitions_per_sec"] = 0.0
-            metrics["optimizer_updates_per_sec"] = 0.0
+            metrics["env_transitions_per_sec_session"] = 0.0
+            metrics["training_transitions_per_sec_session"] = 0.0
+            metrics["optimizer_updates_per_sec_session"] = 0.0
+
+        if isinstance(elapsed_active, (int, float)) and elapsed_active > 0:
+            env_transitions = metrics.get("env_transitions", 0)
+            training_transitions = metrics.get("training_transitions", 0)
+            optimizer_updates = metrics.get("optimizer_updates", 0)
+            if isinstance(env_transitions, (int, float)):
+                metrics["env_transitions_per_sec_active"] = env_transitions / elapsed_active
+            if isinstance(training_transitions, (int, float)):
+                metrics["training_transitions_per_sec_active"] = training_transitions / elapsed_active
+            if isinstance(optimizer_updates, (int, float)):
+                metrics["optimizer_updates_per_sec_active"] = optimizer_updates / elapsed_active
+        else:
+            metrics["env_transitions_per_sec_active"] = 0.0
+            metrics["training_transitions_per_sec_active"] = 0.0
+            metrics["optimizer_updates_per_sec_active"] = 0.0
+
+        # Backward compatibility aliases
+        metrics["transitions"] = metrics.get("env_transitions", 0)
+        metrics["total_training_time"] = metrics.get("total_session_time", 0.0)
+        metrics["transitions_per_sec"] = metrics.get("env_transitions_per_sec_session", 0.0)
+        metrics["optimizer_updates_per_sec"] = metrics.get("optimizer_updates_per_sec_session", 0.0)
+
         # Remove None values
         return {k: v for k, v in metrics.items() if v is not None}
 
@@ -488,8 +546,13 @@ class TrainingController:
             epsilon_decay=self.agent_config.epsilon_decay,
             memory_size=self.agent_config.memory_size,
             batch_size=self.agent_config.batch_size,
-            target_update_freq=self.agent_config.target_update_freq,
+            tau=self.agent_config.tau,
+            dropout=self.agent_config.dropout,
             device=self.agent_config.device,
+            learning_starts=self.agent_config.learning_starts,
+            train_every=self.agent_config.train_every,
+            gradient_steps=self.agent_config.gradient_steps,
+            epsilon_decay_steps=self.agent_config.epsilon_decay_steps,
         )
 
     # -------------------------------------------------------------------------
@@ -524,16 +587,25 @@ class TrainingController:
             )
 
     def clear_history(self) -> None:
-        """Clear displayed charts and statistics, keep model weights and replay buffer."""
+        """Clear displayed charts and statistics (display only).
+
+        This is a DISPLAY-ONLY operation. It clears chart windows but preserves:
+        - Model weights and optimizer state
+        - Replay buffer
+        - Epsilon value
+        - Lifetime training counters (n_games, total_steps, trainer.training_step)
+        - Termination history
+        """
         with self._lock:
             if self._agent:
                 self._agent.reset_stats()
+            # Reset display-scoped counters only
             self._episode_id = 0
             self._step_id = 0
             self.clear_events()
             self._emit_event(
                 EventType.HISTORY_CLEAR,
-                "Training history cleared",
+                "Display history cleared (training state preserved)",
             )
 
     def new_run(self) -> None:
@@ -596,6 +668,8 @@ class TrainingController:
             TrainingSnapshot with pre-action decision data and post-step state.
         """
         with self._lock:
+            # Single step uses Watch-mode diagnostics (compute Q-values)
+            self._execution_policy = "Watch"
             return self._step_impl(action)
 
     def _step_impl(self, action: int | None = None) -> TrainingSnapshot:
@@ -608,9 +682,11 @@ class TrainingController:
         if self._game_over or self._env is None:
             return self._make_snapshot()
 
-        # Initialize metrics start time if not set
-        if self._metrics["start_time"] is None:
-            self._metrics["start_time"] = time.monotonic()
+        now = time.monotonic()
+        # Initialize session start time if not set
+        if self._metrics["session_start_time"] is None:
+            self._metrics["session_start_time"] = now
+            self._metrics["last_transition_time"] = now
 
         # --- Get action (pre-step) ---
         t_action_start = time.monotonic()
@@ -670,16 +746,23 @@ class TrainingController:
         replay_loss = None
         if self._mode == ActivityMode.TRAIN and self._agent is not None:
             t_opt_start = time.monotonic()
+            optimizer_steps_before = self._agent.trainer.training_step
             # Store transition (terminated controls bootstrap, truncated stored separately)
             assert self._observation is not None, "Observation should be set before training"
             self._agent.remember(self._observation, action, reward, next_obs, terminated, truncated)
-            # Train on short memory (immediate)
-            self._agent.train_short_memory(self._observation, action, reward, next_obs, terminated)
-            # Train on replay memory
-            replay_loss = self._agent.train_long_memory()
+            # Unified optimization step (replaces dual-update loop)
+            losses = self._agent.maybe_optimize()
             self._metrics["time_optimization"] = (
                 (self._metrics.get("time_optimization") or 0.0) + time.monotonic() - t_opt_start
             )
+
+            # Update optimizer_updates from authoritative trainer counter
+            optimizer_steps_after = self._agent.trainer.training_step
+            delta = optimizer_steps_after - optimizer_steps_before
+            self._metrics["optimizer_updates"] = (
+                (self._metrics.get("optimizer_updates") or 0) + delta
+            )
+            self._metrics["_prev_optimizer_step"] = optimizer_steps_after
 
             # Update replay metrics
             self._metrics["replay_buffer_size"] = len(self._agent.memory)
@@ -694,10 +777,15 @@ class TrainingController:
                     "Replay buffer ready — replay training active",
                 )
 
-            if replay_loss is not None:
-                self._metrics["optimizer_updates"] = (
-                    self._metrics.get("optimizer_updates") or 0
-                ) + 1
+            # Track training transitions and losses
+            if losses:
+                self._metrics["training_transitions"] = (
+                    self._metrics.get("training_transitions") or 0
+                ) + len(losses)
+                # Use last loss for event/stat purposes
+                replay_loss = losses[-1]
+            else:
+                replay_loss = None
 
             # Sync agent's step counter
             self._agent.total_steps += 1
@@ -708,7 +796,7 @@ class TrainingController:
         self._game_over = done
         self._action = action
         self._step_id += 1
-        self._metrics["transitions"] = (self._metrics.get("transitions") or 0) + 1
+        self._metrics["env_transitions"] = (self._metrics.get("env_transitions") or 0) + 1
 
         # --- Update Q-values for NEXT state visualization ---
         if self._agent is not None:
@@ -724,12 +812,20 @@ class TrainingController:
             self._handle_episode_end(info["score"], replay_loss, terminated, truncated, info)
             self._metrics["episodes_completed"] = (self._metrics.get("episodes_completed") or 0) + 1
 
-        # Update total training time
-        start_time = self._metrics.get("start_time")
-        if start_time is not None:
-            self._metrics["total_training_time"] = time.monotonic() - start_time
+        # Update timing metrics
+        session_start = self._metrics.get("session_start_time")
+        if session_start is not None:
+            self._metrics["total_session_time"] = now - session_start
+            # Active execution time: accumulate time between transitions
+            last_transition = self._metrics.get("last_transition_time")
+            if last_transition is not None:
+                self._metrics["active_execution_time"] = (
+                    (self._metrics.get("active_execution_time") or 0.0) + now - last_transition
+                )
+            self._metrics["last_transition_time"] = now
         else:
-            self._metrics["total_training_time"] = 0.0
+            self._metrics["total_session_time"] = 0.0
+            self._metrics["active_execution_time"] = 0.0
 
         return self._make_snapshot(
             pre_observation=pre_observation,
@@ -800,6 +896,9 @@ class TrainingController:
                 raise ValueError(f"max_burst_steps must be positive, got {max_burst_steps}")
             if burst_time_budget <= 0:
                 raise ValueError(f"burst_time_budget must be positive, got {burst_time_budget}")
+
+        # Store execution policy for diagnostic gating
+        self._execution_policy = execution_policy
 
         # Don't advance if paused or in manual mode
         if self._paused or self._mode == ActivityMode.MANUAL:
@@ -874,8 +973,13 @@ class TrainingController:
         assert agent is not None
         assert self._observation is not None
 
+        # During fast training, skip Q-value computation for exploration steps
+        compute_q = not (self._mode == ActivityMode.TRAIN and 
+                         hasattr(self, '_execution_policy') and 
+                         self._execution_policy == "FastTraining")
+
         if self._mode == ActivityMode.TRAIN:
-            return agent.get_action_with_q_values(self._observation, training=True)  # type: ignore
+            return agent.get_action_with_q_values(self._observation, training=True, compute_q_values=compute_q)  # type: ignore
         elif self._mode == ActivityMode.EVALUATE:
             action, reason, q_values = agent.get_action_with_q_values(
                 self._observation, training=False
@@ -895,8 +999,8 @@ class TrainingController:
         info: dict[str, Any],
     ) -> None:
         """Handle episode completion: update stats, decay epsilon (TRAIN only), emit event."""
-        # Classify termination reason
-        termination_reason = self._classify_termination(terminated, truncated, info)
+        # Use termination_reason from environment (explicit, not inferred)
+        termination_reason = info.get("termination_reason", "unknown")
 
         reason_labels = {
             "wall": "wall collision",
@@ -925,46 +1029,19 @@ class TrainingController:
         if self._mode == ActivityMode.TRAIN and self._agent is not None:
             # Update agent's authoritative stats
             self._agent.update_stats(score, replay_loss, termination_reason)
-            # Decay epsilon ONCE per completed training episode
-            self._agent.decay_epsilon()
+            # Decay epsilon: use step-based if configured, else per-episode
+            if self._agent.epsilon_decay_steps > 0:
+                self._agent.decay_epsilon_by_steps(
+                    self._agent.trainer.training_step,
+                    self._agent.epsilon_decay_steps
+                )
+            else:
+                self._agent.decay_epsilon()
 
             self._episode_id += 1
         else:
             # For EVALUATE/MANUAL, still track episode_id for UI
             self._episode_id += 1
-
-    def _classify_termination(self, terminated: bool, truncated: bool, info: dict[str, Any]) -> str:
-        """Classify episode termination reason from environment info."""
-        if truncated:
-            return "timeout"
-
-        if not terminated:
-            return "unknown"
-
-        # terminated=True - check collision type using game state
-        game_state = self._game_state or {}
-        # Food is None means board full (victory)
-        if game_state.get("food") is None:
-            return "victory"
-
-        # Check if head collided with wall or self
-        snake = game_state.get("snake", [])
-        if not snake:
-            return "wall"  # fallback
-
-        head = snake[0]
-        grid_size = game_state.get("grid_size", 20)
-
-        # Wall collision
-        if head[0] < 0 or head[0] >= grid_size or head[1] < 0 or head[1] >= grid_size:
-            return "wall"
-
-        # Self collision (head in body)
-        if head in snake[1:]:
-            return "self"
-
-        # Default to wall if we can't determine
-        return "wall"
 
     def _reset_episode(self) -> None:
         """Reset environment for new episode, keep agent state."""
@@ -1015,6 +1092,9 @@ class TrainingController:
         # Get recent events (last 20)
         recent_events = self._events[-20:] if self._events else []
 
+        # Get Bellman update details from agent
+        bellman_details = self._agent.get_last_bellman_details() if self._agent else None
+
         return TrainingSnapshot(
             observation=obs if obs is not None else np.zeros(11, dtype=np.float32),
             game_state=self._game_state or {},
@@ -1038,6 +1118,7 @@ class TrainingController:
             step_id=self._step_id,
             metrics=self.get_metrics(),
             recent_events=recent_events,
+            bellman_details=bellman_details,
         )
 
     def get_snapshot(self) -> TrainingSnapshot:
@@ -1050,25 +1131,32 @@ class TrainingController:
     # -------------------------------------------------------------------------
 
     def save_checkpoint(self, filepath: str) -> None:
-        """Save agent checkpoint."""
+        """Save full training checkpoint including environment and controller state."""
         with self._lock:
             if self._agent:
-                self._agent.save_checkpoint(filepath)
+                self._agent.save_checkpoint(
+                    filepath,
+                    env=self._env,
+                    run_id=self._run_id,
+                    episode_id=self._episode_id,
+                    step_id=self._step_id,
+                    replay_warmed_up=self._replay_warmed_up,
+                )
 
     def load_checkpoint(self, filepath: str) -> dict[str, Any]:
         """
-        Load agent checkpoint transactionally.
+        Load agent checkpoint transactionally with full state restore.
 
         Loads into a candidate agent first, validates architecture and optimizer state,
         then atomically replaces the live agent. If validation fails, the live agent
-        is unchanged.
+        is unchanged. Also restores environment and controller state.
 
         Returns:
             Checkpoint metadata dict.
 
         Raises:
             FileNotFoundError: If checkpoint doesn't exist.
-            ValueError: If architecture mismatch or invalid optimizer state.
+            ValueError: If architecture/schema mismatch or invalid optimizer state.
             RuntimeError: If controller is faulted.
         """
         with self._lock:
@@ -1081,7 +1169,7 @@ class TrainingController:
             # Create candidate agent
             candidate_agent = self._create_agent()
 
-            # Load checkpoint into candidate
+            # Load checkpoint into candidate with environment
             try:
                 info: dict[str, Any] = candidate_agent.load_checkpoint(filepath)
             except Exception as e:
@@ -1100,10 +1188,12 @@ class TrainingController:
 
             # All validations passed - atomically swap
             self._agent = candidate_agent
-            # Sync internal counters
-            self._episode_id = self._agent.n_games
+            # Sync internal counters from checkpoint info
+            self._run_id = info.get("run_id", self._run_id)
+            self._episode_id = info.get("episode_id", self._agent.n_games)
+            self._step_id = info.get("step_id", 0)
+            self._replay_warmed_up = info.get("replay_warmed_up", False)
             self.clear_events()
-            self._replay_warmed_up = self._agent.memory.is_ready(self._agent.batch_size)
             self._emit_event(
                 EventType.CHECKPOINT_LOAD,
                 f"Loaded checkpoint: ep {info.get('episode', 0)}, ε={info.get('epsilon', 1.0):.3f}",

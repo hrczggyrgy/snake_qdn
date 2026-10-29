@@ -342,6 +342,53 @@ def render_sidebar_agent(controller: TrainingController) -> None:
                 index=[256, 512, 1000, 2048].index(controller.agent_config.batch_size),
                 key="sidebar_batch_size",
             )
+            tau = st.number_input(
+                "Target Tau (Soft Update)",
+                0.001,
+                1.0,
+                controller.agent_config.tau,
+                0.001,
+                format="%.3f",
+                key="sidebar_tau",
+                help="Soft update coefficient for target network. Lower = slower updates.",
+            )
+            dropout = st.number_input(
+                "Dropout",
+                0.0,
+                0.5,
+                controller.agent_config.dropout,
+                0.05,
+                format="%.2f",
+                key="sidebar_dropout",
+                help="Dropout rate for hidden layers. 0 = disabled.",
+            )
+            learning_starts = st.number_input(
+                "Learning Starts",
+                0,
+                100000,
+                controller.agent_config.learning_starts,
+                500,
+                key="sidebar_learning_starts",
+                help="Number of transitions before training begins (replay warm-up).",
+            )
+            train_every = st.number_input(
+                "Train Every",
+                1,
+                100,
+                controller.agent_config.train_every,
+                1,
+                key="sidebar_train_every",
+                help="Train every N environment transitions.",
+            )
+            gradient_steps = st.number_input(
+                "Gradient Steps",
+                1,
+                10,
+                controller.agent_config.gradient_steps,
+                1,
+                key="sidebar_gradient_steps",
+                help="Optimizer steps per training call.",
+            )
 
             if st.form_submit_button("Create New Agent", width="stretch", type="primary"):
                 new_config = AgentConfig(
@@ -353,6 +400,11 @@ def render_sidebar_agent(controller: TrainingController) -> None:
                     epsilon_decay=epsilon_decay,
                     memory_size=memory_size,
                     batch_size=batch_size,
+                    tau=tau,
+                    dropout=dropout,
+                    learning_starts=learning_starts,
+                    train_every=train_every,
+                    gradient_steps=gradient_steps,
                 )
                 controller.update_agent_config(new_config)
                 st.success("New agent created with fresh replay buffer!")

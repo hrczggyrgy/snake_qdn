@@ -395,14 +395,34 @@ def render_latest_event(events: list[dict]) -> str | None:
 # =============================================================================
 
 
-def render_outcome_summary(termination_counts: dict[str, int], window: int = 50) -> str | None:
+def render_outcome_summary(
+    termination_counts: dict[str, int] | None = None,
+    window: int = 50,
+    recent_terminations: list[str] | None = None,
+) -> str | None:
     """Render horizontal stacked bar of recent episode outcomes.
 
     Args:
-        termination_counts: Dict with keys wall, self, timeout, victory
-        window: Maximum episodes in the window (denominator is actual completed)
+        termination_counts: Lifetime totals (used if recent_terminations not provided)
+        window: Maximum episodes in the window (denominator is actual completed in window)
+        recent_terminations: List of recent termination reasons (most recent last), maxlen=window.
+                           If provided, this takes precedence over termination_counts.
     """
-    if not termination_counts or sum(termination_counts.values()) == 0:
+    # Determine what to display
+    if recent_terminations is not None:
+        counts = {"wall": 0, "self": 0, "timeout": 0, "victory": 0}
+        for reason in recent_terminations:
+            if reason in counts:
+                counts[reason] += 1
+        completed = len(recent_terminations)
+        denominator = completed
+        source_label = f"last {completed}"
+    elif termination_counts and sum(termination_counts.values()) > 0:
+        counts = termination_counts
+        completed = sum(counts.values())
+        denominator = max(completed, window) if completed >= window else completed
+        source_label = f"lifetime ({completed})"
+    else:
         return None
 
     colors = {
@@ -418,13 +438,10 @@ def render_outcome_summary(termination_counts: dict[str, int], window: int = 50)
         "victory": "Victory",
     }
 
-    completed = sum(termination_counts.values())
-    denominator = max(completed, window) if completed >= window else completed
-
     # Build stacked bar segments
     segments = []
     for reason in ["wall", "self", "timeout", "victory"]:
-        count = termination_counts.get(reason, 0)
+        count = counts.get(reason, 0)
         if count > 0:
             pct = count / denominator * 100
             segments.append(
@@ -447,13 +464,14 @@ def render_outcome_summary(termination_counts: dict[str, int], window: int = 50)
 
     # Legend
     legend_items = []
+    total = sum(counts.values())
     for reason in ["wall", "self", "timeout", "victory"]:
-        count = termination_counts.get(reason, 0)
+        count = counts.get(reason, 0)
         if count > 0:
             legend_items.append(
                 f'<span class="sqdn-outcome-legend-item">'
                 f'<span class="sqdn-outcome-legend-swatch" style="background: {colors[reason]};"></span>'
-                f"{labels[reason]}: {count}"
+                f"{labels[reason]}: {count} ({count / max(total, 1) * 100:.1f}%)"
                 f"</span>"
             )
     if remaining > 0:
@@ -468,7 +486,7 @@ def render_outcome_summary(termination_counts: dict[str, int], window: int = 50)
 
     html = f"""
     <div class="sqdn-outcome-summary">
-        <div class="sqdn-outcome-header">Recent Episode Outcomes (last {window})</div>
+        <div class="sqdn-outcome-header">Recent Episode Outcomes ({source_label})</div>
         <div class="sqdn-outcome-bar">{bar_html}</div>
         <div class="sqdn-outcome-legend">{legend_html}</div>
         <div style="font-size: 0.75rem; color: var(--sqdn-text-muted); margin-top: 0.25rem;">
