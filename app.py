@@ -7,7 +7,12 @@ A comprehensive dashboard with three main views:
 3. Learning Analytics - Scores, loss curves, exploration tracking
 """
 
+import logging
 import streamlit as st
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Import our modules
 from training import (
@@ -153,36 +158,28 @@ def main():
         ctl = get_controller()
 
         # =========================================================================
-        # EXECUTION LOGIC (runs on every fragment refresh when not paused)
+        # EXECUTION: Single call to controller.advance_tick()
         # =========================================================================
-        if not ctl.paused and ctl.mode != ActivityMode.MANUAL:
-            policy = st.session_state.get("execution_policy", "Watch")
-            
-            if policy == "FastTraining":
-                import time as _time
-
+        try:
+            if not ctl.paused and ctl.mode != ActivityMode.MANUAL:
+                policy = st.session_state.get("execution_policy", "Watch")
                 max_steps = st.session_state.get("max_burst_steps", 50)
                 time_budget = st.session_state.get("burst_time_budget", 0.05)
-                burst_start = _time.monotonic()
-                steps_executed = 0
-
-                while steps_executed < max_steps and not ctl.game_over:
-                    ctl.step()
-                    steps_executed += 1
-
-                    if _time.monotonic() - burst_start >= time_budget:
-                        break
-
-                if ctl.game_over and ctl.mode == ActivityMode.TRAIN:
-                    ctl.restart_board()
-            else:
-                if not ctl.game_over:
-                    ctl.step()
-                elif ctl.mode == ActivityMode.TRAIN:
-                    ctl.restart_board()
-                else:
-                    ctl.set_paused(True)
-                    st.rerun()
+                
+                ctl.advance_tick(
+                    execution_policy=policy,
+                    max_burst_steps=max_steps,
+                    burst_time_budget=time_budget,
+                )
+        except Exception:
+            logger.exception(
+                "Live execution failed: mode=%s paused=%s game_over=%s episode=%s",
+                ctl.mode.value,
+                ctl.paused,
+                ctl.game_over,
+                ctl.episode,
+            )
+            raise
 
         # =========================================================================
         # RENDERING: Get fresh snapshot AFTER execution

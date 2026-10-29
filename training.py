@@ -651,6 +651,75 @@ class TrainingController:
             pre_action_probs=pre_action_probs,
         )
 
+    # -------------------------------------------------------------------------
+    # Automatic Execution (for live dashboard)
+    # -------------------------------------------------------------------------
+
+    def advance_tick(
+        self,
+        execution_policy: str = "Watch",
+        max_burst_steps: int = 50,
+        burst_time_budget: float = 0.05,
+    ) -> TrainingSnapshot:
+        """
+        Execute one automatic training tick according to policy.
+
+        This is the single entry point for automatic execution (used by live dashboard).
+        It handles:
+        - Watch mode: one step, with auto-restart on terminal board in TRAIN
+        - FastTraining: bounded burst of steps, with auto-restart on terminal board in TRAIN
+        - Evaluation/Manual: pauses on terminal board
+
+        Args:
+            execution_policy: "Watch" or "FastTraining"
+            max_burst_steps: Max steps per burst (FastTraining only)
+            burst_time_budget: Time budget per burst in seconds (FastTraining only)
+
+        Returns:
+            Fresh TrainingSnapshot after execution.
+
+        Raises:
+            Any exception from step()/restart_board() - caller should handle.
+        """
+        # Don't advance if paused or in manual mode
+        if self._paused or self._mode == ActivityMode.MANUAL:
+            return self.get_snapshot()
+
+        # Ensure board is initialized (only if never started)
+        if self._game_state is None:
+            self.restart_board()
+
+        if execution_policy == "FastTraining":
+            import time as _time
+
+            max_steps = max_burst_steps
+            time_budget = burst_time_budget
+            burst_start = _time.monotonic()
+            steps_executed = 0
+
+            while steps_executed < max_steps and not self._game_over:
+                self.step()
+                steps_executed += 1
+
+                if _time.monotonic() - burst_start >= time_budget:
+                    break
+
+            # After burst, if game ended in TRAIN, restart for next episode
+            if self._game_over and self._mode == ActivityMode.TRAIN:
+                self.restart_board()
+        else:
+            # Watch mode
+            if not self._game_over:
+                self.step()
+            elif self._mode == ActivityMode.TRAIN:
+                # Training: auto-restart on terminal board
+                self.restart_board()
+            else:
+                # Evaluation: pause on terminal board
+                self.set_paused(True)
+
+        return self.get_snapshot()
+
     def _select_action(self) -> tuple[int, str, np.ndarray | None]:
         """Select action based on current mode and agent policy."""
         agent = self.agent  # Ensure agent is created
