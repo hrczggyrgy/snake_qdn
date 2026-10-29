@@ -2,20 +2,16 @@
 Game rendering components: board, decision strip, event feed, outcome summary.
 """
 
-import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
 
+from training import TrainingSnapshot
 from ui.styles import (
-    BOARD_SIZE,
-    BOARD_MARGIN,
     ACTION_NAMES,
     ACTION_NAMES_SHORT,
-    TERMINATION_REASONS,
-    inject_global_styles,
+    BOARD_MARGIN,
+    BOARD_SIZE,
 )
-from training import TrainingSnapshot, ActivityMode
-
 
 # =============================================================================
 # Game Board (Plotly Coordinate Renderer)
@@ -76,7 +72,6 @@ def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.
         # Eyes on head
         if i == 0:
             eye_size = 0.2
-            eye_offset = 0.15
             if direction == 0:  # Right
                 eyes = [(0.65, 0.2), (0.65, 0.6)]
             elif direction == 2:  # Left
@@ -335,7 +330,7 @@ def render_event_feed(events: list[dict], max_events: int = 5) -> str | None:
     if not events:
         return None
 
-    html_parts = [f'<div class="sqdn-event-feed">']
+    html_parts = ['<div class="sqdn-event-feed">']
     for event in events[-max_events:]:
         html_parts.append(format_event(event))
     html_parts.append('</div>')

@@ -3,8 +3,8 @@ Control components: Primary toolbar, sidebar configuration forms.
 """
 
 import streamlit as st
-from training import TrainingController, ActivityMode, EnvConfig, AgentConfig
 
+from training import ActivityMode, AgentConfig, EnvConfig, TrainingController
 
 # =============================================================================
 # Primary Toolbar (Main Content Area)
@@ -127,7 +127,6 @@ def render_primary_toolbar(controller: TrainingController) -> None:
 
     # Main Control Buttons
     is_paused = controller.paused
-    is_running = not is_paused
 
     # Start/Resume/Pause Button
     if controller.mode == ActivityMode.TRAIN:
@@ -241,7 +240,7 @@ def render_manual_controls(controller: TrainingController, snapshot) -> None:
     with mc1:
         if st.button("⬆️ Straight", key="manual_straight", width="stretch"):
             # Straight relative to current direction
-            direction = snapshot.game_state.get("direction", 0) if snapshot.game_state else 0
+            snapshot.game_state.get("direction", 0) if snapshot.game_state else 0
             # Action 0 = straight
             controller.step(action=0)
             st.rerun()

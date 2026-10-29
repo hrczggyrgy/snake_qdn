@@ -9,14 +9,13 @@ import numpy as np
 import plotly.graph_objects as go
 
 from ui.styles import (
+    ACTION_NAMES,
     CHART_HEIGHT_MAIN,
+    CHART_HEIGHT_NETWORK,
+    CHART_HEIGHT_QVALUES,
     CHART_HEIGHT_SMALL,
     CHART_HEIGHT_STATE,
-    CHART_HEIGHT_QVALUES,
-    CHART_HEIGHT_NETWORK,
     STATE_LABELS_FLAT,
-    ACTION_NAMES,
-    ACTION_NAMES_SHORT,
     get_plotly_template,
 )
 
@@ -428,41 +427,41 @@ def render_q_values(
     annotations = []
     if action_executed is not None:
         annotations.append(
-            dict(
-                x=ACTION_NAMES[action_executed],
-                y=q_values[action_executed],
-                text="▲ EXECUTED",
-                showarrow=True,
-                arrowhead=2,
-                arrowcolor="#ff8800",
-                arrowsize=1,
-                ax=0,
-                ay=-30,
-                font={"color": "#ff8800", "size": 9, "family": "monospace"},
-                bgcolor="rgba(0,0,0,0.7)",
-                bordercolor="#ff8800",
-                borderwidth=1,
-                borderpad=2,
-            )
+            {
+                "x": ACTION_NAMES[action_executed],
+                "y": q_values[action_executed],
+                "text": "▲ EXECUTED",
+                "showarrow": True,
+                "arrowhead": 2,
+                "arrowcolor": "#ff8800",
+                "arrowsize": 1,
+                "ax": 0,
+                "ay": -30,
+                "font": {"color": "#ff8800", "size": 9, "family": "monospace"},
+                "bgcolor": "rgba(0,0,0,0.7)",
+                "bordercolor": "#ff8800",
+                "borderwidth": 1,
+                "borderpad": 2,
+            }
         )
     if action_preferred is not None and action_preferred != action_executed:
         annotations.append(
-            dict(
-                x=ACTION_NAMES[action_preferred],
-                y=q_values[action_preferred],
-                text="◆ PREFERRED",
-                showarrow=True,
-                arrowhead=2,
-                arrowcolor="#4488ff",
-                arrowsize=1,
-                ax=0,
-                ay=30,
-                font={"color": "#4488ff", "size": 9, "family": "monospace"},
-                bgcolor="rgba(0,0,0,0.7)",
-                bordercolor="#4488ff",
-                borderwidth=1,
-                borderpad=2,
-            )
+            {
+                "x": ACTION_NAMES[action_preferred],
+                "y": q_values[action_preferred],
+                "text": "◆ PREFERRED",
+                "showarrow": True,
+                "arrowhead": 2,
+                "arrowcolor": "#4488ff",
+                "arrowsize": 1,
+                "ax": 0,
+                "ay": 30,
+                "font": {"color": "#4488ff", "size": 9, "family": "monospace"},
+                "bgcolor": "rgba(0,0,0,0.7)",
+                "bordercolor": "#4488ff",
+                "borderwidth": 1,
+                "borderpad": 2,
+            }
         )
 
     # Q-value gap annotation
@@ -475,17 +474,17 @@ def render_q_values(
         elif selection_reason == "exploiting":
             gap_text += " (exploiting)"
         annotations.append(
-            dict(
-                x=0.5,
-                y=1.05,
-                xref="paper",
-                yref="paper",
-                text=gap_text,
-                showarrow=False,
-                font={"size": 10, "color": "rgba(255,255,255,0.8)"},
-                xanchor="center",
-                yanchor="bottom",
-            )
+            {
+                "x": 0.5,
+                "y": 1.05,
+                "xref": "paper",
+                "yref": "paper",
+                "text": gap_text,
+                "showarrow": False,
+                "font": {"size": 10, "color": "rgba(255,255,255,0.8)"},
+                "xanchor": "center",
+                "yanchor": "bottom",
+            }
         )
 
     fig.update_layout(

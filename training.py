@@ -320,7 +320,18 @@ class TrainingController:
 
     @property
     def episode(self) -> int:
+        """Total completed episodes (training + evaluation)."""
+        return self._episode_id
+
+    @property
+    def training_episodes(self) -> int:
+        """Completed training episodes (where learning occurred)."""
         return self.agent.n_games if self._agent else 0
+
+    @property
+    def evaluation_episodes(self) -> int:
+        """Completed evaluation episodes (no learning)."""
+        return self._episode_id - (self.agent.n_games if self._agent else 0)
 
     @property
     def total_env_steps(self) -> int:
@@ -679,8 +690,20 @@ class TrainingController:
             Fresh TrainingSnapshot after execution.
 
         Raises:
+            ValueError: If execution_policy is invalid or burst settings are invalid.
             Any exception from step()/restart_board() - caller should handle.
         """
+        # Validate execution policy
+        if execution_policy not in ("Watch", "FastTraining"):
+            raise ValueError(f"Unknown execution policy: {execution_policy!r}. Expected 'Watch' or 'FastTraining'.")
+
+        # Validate FastTraining parameters
+        if execution_policy == "FastTraining":
+            if max_burst_steps <= 0:
+                raise ValueError(f"max_burst_steps must be positive, got {max_burst_steps}")
+            if burst_time_budget <= 0:
+                raise ValueError(f"burst_time_budget must be positive, got {burst_time_budget}")
+
         # Don't advance if paused or in manual mode
         if self._paused or self._mode == ActivityMode.MANUAL:
             return self.get_snapshot()
@@ -704,9 +727,14 @@ class TrainingController:
                 if _time.monotonic() - burst_start >= time_budget:
                     break
 
-            # After burst, if game ended in TRAIN, restart for next episode
-            if self._game_over and self._mode == ActivityMode.TRAIN:
-                self.restart_board()
+            # After burst, handle terminal board based on mode
+            if self._game_over:
+                if self._mode == ActivityMode.TRAIN:
+                    # Training: auto-restart on terminal board
+                    self.restart_board()
+                else:
+                    # Evaluation/Manual: pause on terminal board
+                    self.set_paused(True)
         else:
             # Watch mode
             if not self._game_over:

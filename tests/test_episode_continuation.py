@@ -10,8 +10,7 @@ This test verifies that when a training episode ends:
 5. Epsilon decays exactly once (not again during reset)
 """
 
-import numpy as np
-from training import TrainingController, ActivityMode
+from training import ActivityMode, TrainingController
 
 
 def test_auto_episode_continuation_watch_mode():
@@ -79,6 +78,8 @@ def test_auto_episode_continuation_fast_training():
     controller = TrainingController()
     controller.agent_config.batch_size = 4
     controller.agent_config.memory_size = 100
+    # Use smaller grid for faster termination
+    controller.update_env_config(controller.env_config.__class__(grid_size=10))
     controller._agent = None  # Force recreation
     controller.set_mode(ActivityMode.TRAIN)
     controller.set_paused(False)
@@ -93,7 +94,7 @@ def test_auto_episode_continuation_fast_training():
     # Run enough bursts to complete an episode
     episode_ended = False
     for burst in range(50):
-        snapshot = controller.advance_tick(
+        controller.advance_tick(
             execution_policy="FastTraining",
             max_burst_steps=20,
             burst_time_budget=0.1,
@@ -105,6 +106,7 @@ def test_auto_episode_continuation_fast_training():
 
     assert episode_ended, "Episode did not end within max bursts"
     assert controller.episode == episode_before + 1
+    assert controller.training_episodes == episode_before + 1
     assert controller.paused is False
 
     # Next burst should restart and continue
@@ -123,6 +125,7 @@ def test_auto_episode_continuation_fast_training():
     assert abs(controller.epsilon - expected_epsilon) < 1e-6
 
     print(f"  Episode count: {controller.episode}")
+    print(f"  Training episodes: {controller.training_episodes}")
     print(f"  Epsilon: {controller.epsilon:.4f} (was {epsilon_before:.4f})")
     print(f"  Replay size: {len(controller.agent.memory)}")
 
@@ -135,6 +138,8 @@ def test_evaluation_pauses_on_terminal():
     print("Testing evaluation pauses on terminal board...")
 
     controller = TrainingController()
+    # Use smaller grid for faster termination
+    controller.update_env_config(controller.env_config.__class__(grid_size=10))
     controller.set_mode(ActivityMode.EVALUATE)
     controller.set_paused(False)
 
@@ -147,7 +152,9 @@ def test_evaluation_pauses_on_terminal():
     # Episode ended, now next tick should pause (not restart)
     snapshot = controller.advance_tick(execution_policy="Watch")
     assert controller.paused is True, "Evaluation should pause on terminal board"
-    assert controller.episode == 1, "Episode count should be 1"
+    assert controller.episode == 1, "Total episode count should be 1"
+    assert controller.evaluation_episodes == 1, "Evaluation episode count should be 1"
+    assert controller.training_episodes == 0, "Training episode count should be 0"
 
     controller.close()
     print("  ✓ Evaluation pause test passed!")
@@ -165,7 +172,7 @@ def test_manual_mode_no_auto_advance():
     env_steps_before = controller.total_env_steps
 
     # Advance tick should do nothing in manual mode
-    snapshot = controller.advance_tick(execution_policy="Watch")
+    controller.advance_tick(execution_policy="Watch")
 
     assert controller.episode == episode_before
     assert controller.total_env_steps == env_steps_before

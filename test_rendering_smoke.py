@@ -6,7 +6,6 @@ from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
-from agent import Agent
 from snake_env import SnakeGameAI
 
 

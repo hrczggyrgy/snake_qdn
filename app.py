@@ -8,39 +8,30 @@ A comprehensive dashboard with three main views:
 """
 
 import logging
+
 import streamlit as st
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Import our modules
-from training import (
-    ActivityMode,
-    AgentConfig,
-    EnvConfig,
-    TrainingController,
-    TrainingSnapshot,
-)
-
-# Import UI modules
-from ui.styles import inject_global_styles, BOARD_SIZE
+from training import ActivityMode, TrainingController
+from ui.charts import render_epsilon_chart, render_loss_chart, render_score_chart
 from ui.controls import (
-    render_primary_toolbar,
     render_manual_controls,
+    render_primary_toolbar,
     render_sidebar,
     render_status_badge_inline,
 )
 from ui.game import (
-    render_game_board,
     render_decision_strip_with_disclosure,
+    render_game_board,
     render_latest_event,
-    render_outcome_summary,
     render_metrics_row,
+    render_outcome_summary,
 )
 from ui.inspection import render_inspect_learning, render_training_diagnostics
-from ui.charts import render_score_chart, render_loss_chart, render_epsilon_chart
+from ui.styles import BOARD_SIZE, inject_global_styles
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Streamlit Version Compatibility
@@ -115,13 +106,8 @@ def main():
     # =============================================================================
     st.markdown('<div class="sqdn-page">', unsafe_allow_html=True)
 
-    # Title and status line
-    col_title, col_status = st.columns([3, 1])
-    with col_title:
-        st.markdown("## 🐍 Snake DQN Live Training Dashboard")
-    with col_status:
-        status_html = render_status_badge_inline(controller)
-        st.markdown(status_html, unsafe_allow_html=True)
+    # Title
+    st.markdown("## 🐍 Snake DQN Live Training Dashboard")
 
     # =============================================================================
     # PRIMARY CONTROL TOOLBAR (Single Authority)
@@ -137,7 +123,7 @@ def main():
     # This fragment handles BOTH execution (stepping) AND rendering of all
     # live-updating elements: board, metrics, charts, decision strip, events.
     # This ensures everything stays in sync and refreshes together.
-    
+
     running = (
         not controller.paused
         and controller.mode != ActivityMode.MANUAL
@@ -165,7 +151,7 @@ def main():
                 policy = st.session_state.get("execution_policy", "Watch")
                 max_steps = st.session_state.get("max_burst_steps", 50)
                 time_budget = st.session_state.get("burst_time_budget", 0.05)
-                
+
                 ctl.advance_tick(
                     execution_policy=policy,
                     max_burst_steps=max_steps,
@@ -185,6 +171,13 @@ def main():
         # RENDERING: Get fresh snapshot AFTER execution
         # =========================================================================
         snapshot = ctl.get_snapshot()
+
+        # ----- STATUS BADGE (updates with fragment) -----
+        status_html = render_status_badge_inline(ctl)
+        st.markdown(status_html, unsafe_allow_html=True)
+
+        # ----- METRICS ROW (updates with fragment) -----
+        render_metrics_row(ctl)
 
         # ----- LEFT COLUMN: Game Board + Decision Strip + Latest Event -----
         left_col, right_col = st.columns([3, 2], gap="medium")

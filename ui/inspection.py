@@ -3,17 +3,15 @@ Inspect Learning components: State Vector, Q-Values, Network Activations.
 Full-width section below the main game/progress row.
 """
 
-import streamlit as st
 import numpy as np
+import streamlit as st
 
-from ui.styles import inject_global_styles
+from training import TrainingController, TrainingSnapshot
 from ui.charts import (
-    render_state_vector,
-    render_q_values,
     render_network_activations,
+    render_q_values,
+    render_state_vector,
 )
-from ui.game import render_decision_strip_with_disclosure
-from training import TrainingController, TrainingSnapshot, ActivityMode
 
 
 def render_inspect_learning(
@@ -88,11 +86,11 @@ def render_inspect_learning_simple(
 def render_training_diagnostics(controller: TrainingController, snapshot: TrainingSnapshot) -> None:
     """Render the lower Training Diagnostics area (collapsible)."""
     from ui.charts import (
-        render_score_chart,
-        render_loss_chart,
         render_epsilon_chart,
-        render_throughput_chart,
+        render_loss_chart,
+        render_score_chart,
         render_termination_summary,
+        render_throughput_chart,
     )
 
     st.markdown("---")
