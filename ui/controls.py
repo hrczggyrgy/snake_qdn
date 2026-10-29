@@ -161,7 +161,13 @@ def render_primary_toolbar(controller: TrainingController) -> None:
             btn_type = "secondary"
 
     if st.button(btn_label, type=btn_type, key="toolbar_play_pause", width="stretch"):
-        controller.set_paused(not is_paused)
+        if is_paused:
+            # Initialize board if not already initialized or if game over
+            if controller.game_state is None or controller.game_over:
+                controller.restart_board()
+            controller.set_paused(False)
+        else:
+            controller.set_paused(True)
         st.rerun()
 
     # Step Once (only when paused)
