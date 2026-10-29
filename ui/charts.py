@@ -21,11 +21,20 @@ from ui.styles import (
 
 
 def apply_template(fig: go.Figure, height: int | None = None, uirevision: str | None = None):
-    """Apply consistent template to a figure."""
+    """Apply consistent template to a figure.
+    
+    Uses explicit construction order:
+    1. Create figure
+    2. Apply base template (explicit layout properties via update_layout for proper merging)
+    3. Apply chart-specific layout (already on fig from caller)
+    4. Apply final dimensions (height, uirevision)
+    """
     template = get_plotly_template()
-    for key, value in template["layout"].items():
-        if key not in fig.layout:
-            fig.layout[key] = value
+    # Apply template layout properties via update_layout to allow proper merging
+    # with subsequent chart-specific layout updates.
+    # Don't rely on 'key in fig.layout' because Plotly graph objects report True 
+    # for properties that exist as defaults but weren't explicitly set by chart code.
+    fig.update_layout(template["layout"])
     if height is not None:
         fig.update_layout(height=height)
     if uirevision is not None:
@@ -105,7 +114,11 @@ def render_score_chart(
         yaxis_title="Score",
     )
 
-    return apply_template(fig, height=CHART_HEIGHT_MAIN, uirevision="snake-scores")
+    # Apply template FIRST (base layout)
+    fig = apply_template(fig, height=CHART_HEIGHT_MAIN, uirevision="snake-scores")
+    # Chart-specific margins
+    fig.update_layout(margin=dict(l=50, r=20, t=35, b=40))
+    return fig
 
 
 # =============================================================================
@@ -224,7 +237,10 @@ def render_loss_chart(
         yaxis=yaxis_config,
     )
 
-    return apply_template(fig, height=CHART_HEIGHT_SMALL, uirevision="snake-loss")
+    # Apply template FIRST (base layout)
+    fig = apply_template(fig, height=CHART_HEIGHT_SMALL, uirevision="snake-loss")
+    fig.update_layout(margin=dict(l=50, r=20, t=35, b=40))
+    return fig
 
 
 # =============================================================================
@@ -271,7 +287,10 @@ def render_epsilon_chart(
         yaxis={"range": [0, 1.05], "title": "ε"},
     )
 
-    return apply_template(fig, height=CHART_HEIGHT_SMALL, uirevision="snake-epsilon")
+    # Apply template FIRST (base layout)
+    fig = apply_template(fig, height=CHART_HEIGHT_SMALL, uirevision="snake-epsilon")
+    fig.update_layout(margin=dict(l=50, r=20, t=35, b=40))
+    return fig
 
 
 # =============================================================================
@@ -327,7 +346,10 @@ def render_throughput_chart(
         yaxis_title="Rate (per sec)",
     )
 
-    return apply_template(fig, height=CHART_HEIGHT_SMALL, uirevision="snake-throughput")
+    # Apply template FIRST (base layout)
+    fig = apply_template(fig, height=CHART_HEIGHT_SMALL, uirevision="snake-throughput")
+    fig.update_layout(margin=dict(l=50, r=20, t=35, b=40))
+    return fig
 
 
 # =============================================================================
@@ -366,13 +388,16 @@ def render_state_vector(observation: np.ndarray | None) -> go.Figure | None:
         )
     )
 
+    # Apply template FIRST (base layout)
+    fig = apply_template(fig, height=CHART_HEIGHT_STATE, uirevision="snake-state-vector")
+    # Then chart-specific layout
     fig.update_layout(
         title={"text": "State Vector (11D)", "font": {"size": 11}},
         xaxis={"range": [0, 1.1], "showgrid": False, "showticklabels": False, "zeroline": False},
-        yaxis={"showgrid": False, "autorange": "reversed", "tickfont": {"size": 9}},
+        yaxis={"showgrid": False, "autorange": "reversed", "tickfont": {"size": 11}, "automargin": True},
+        margin=dict(l=120, r=20, t=45, b=25),
     )
-
-    return apply_template(fig, height=CHART_HEIGHT_STATE, uirevision="snake-state-vector")
+    return fig
 
 
 # =============================================================================
@@ -436,7 +461,7 @@ def render_q_values(
                 "arrowcolor": "#ff8800",
                 "arrowsize": 1,
                 "ax": 0,
-                "ay": -30,
+                "ay": -35,
                 "font": {"color": "#ff8800", "size": 9, "family": "monospace"},
                 "bgcolor": "rgba(0,0,0,0.7)",
                 "bordercolor": "#ff8800",
@@ -455,7 +480,7 @@ def render_q_values(
                 "arrowcolor": "#4488ff",
                 "arrowsize": 1,
                 "ax": 0,
-                "ay": 30,
+                "ay": 35,
                 "font": {"color": "#4488ff", "size": 9, "family": "monospace"},
                 "bgcolor": "rgba(0,0,0,0.7)",
                 "bordercolor": "#4488ff",
@@ -476,7 +501,7 @@ def render_q_values(
         annotations.append(
             {
                 "x": 0.5,
-                "y": 1.05,
+                "y": 1.08,
                 "xref": "paper",
                 "yref": "paper",
                 "text": gap_text,
@@ -487,10 +512,14 @@ def render_q_values(
             }
         )
 
+    # Apply template FIRST (base layout)
+    fig = apply_template(fig, height=CHART_HEIGHT_QVALUES, uirevision="snake-qvalues")
+    # Then chart-specific layout
     fig.update_layout(
         title={"text": "Q-Values per Action", "font": {"size": 11}},
         yaxis_title="Q-Value",
         annotations=annotations,
+        margin=dict(l=50, r=20, t=55, b=45),
     )
 
     # Ensure y-axis has padding for annotations
@@ -499,8 +528,7 @@ def render_q_values(
     y_range = y_max - y_min
     pad = max(0.5, y_range * 0.3)
     fig.update_yaxes(range=[y_min - pad, y_max + pad])
-
-    return apply_template(fig, height=CHART_HEIGHT_QVALUES, uirevision="snake-qvalues")
+    return fig
 
 
 # =============================================================================
@@ -621,18 +649,21 @@ def render_network_activations(
             layer="below",
         )
 
-    # Title with disclaimer
+    # Title with disclaimer moved to caption - keep title clean
     title_text = "Network Activations"
     if model_revision is None:
         title_text += " (recomputed with current weights)"
 
+    # Apply template FIRST (base layout)
+    fig = apply_template(fig, height=CHART_HEIGHT_NETWORK, uirevision="snake-network")
+    # Then chart-specific layout
     fig.update_layout(
         title={"text": title_text, "font": {"size": 11}},
         xaxis={"range": [-0.4, 3.4], "showgrid": False, "showticklabels": False, "zeroline": False},
-        yaxis={"range": [-1.2, 1.25], "showgrid": False, "showticklabels": False, "zeroline": False},
+        yaxis={"range": [-1.3, 1.3], "showgrid": False, "showticklabels": False, "zeroline": False},
+        margin=dict(l=30, r=30, t=45, b=30),
     )
-
-    return apply_template(fig, height=CHART_HEIGHT_NETWORK, uirevision="snake-network")
+    return fig
 
 
 # =============================================================================
@@ -723,7 +754,10 @@ def render_termination_summary(
         margin={"l": 10, "r": 10, "t": 30, "b": 10},
     )
 
-    return apply_template(fig, height=80, uirevision="snake-termination")
+    # Apply template FIRST (base layout)
+    fig = apply_template(fig, height=80, uirevision="snake-termination")
+    fig.update_layout(margin={"l": 10, "r": 10, "t": 30, "b": 10})
+    return fig
 
 
 # =============================================================================
@@ -774,4 +808,7 @@ def render_eval_comparison(
         yaxis_title="Score",
     )
 
-    return apply_template(fig, height=CHART_HEIGHT_MAIN, uirevision="snake-eval-comparison")
+    # Apply template FIRST (base layout)
+    fig = apply_template(fig, height=CHART_HEIGHT_MAIN, uirevision="snake-eval-comparison")
+    fig.update_layout(margin=dict(l=50, r=20, t=35, b=40))
+    return fig

@@ -93,36 +93,16 @@ init_ui_state()
 
 
 # =============================================================================
-# Main Application
+# Fragment 1: Execution + Game Board (Game Frequency: 50-100ms)
 # =============================================================================
-def main():
+def create_execution_fragment():
+    """Create the execution fragment that owns advance_tick() and renders the game board.
+    
+    This is the ONLY fragment that calls advance_tick(). It runs at game frequency
+    (50ms Watch, 100ms FastTraining) and renders the game board, decision strip,
+    latest event, and status badge.
+    """
     controller = get_controller()
-
-    # Render Sidebar (Configuration only - no primary controls)
-    render_sidebar(controller)
-
-    # =============================================================================
-    # PAGE HEADER
-    # =============================================================================
-    st.markdown('<div class="sqdn-page">', unsafe_allow_html=True)
-
-    # Title
-    st.markdown("## 🐍 Snake DQN Live Training Dashboard")
-
-    # =============================================================================
-    # PRIMARY CONTROL TOOLBAR (Single Authority)
-    # =============================================================================
-    render_primary_toolbar(controller)
-
-    # Manual controls when in Manual mode and paused
-    render_manual_controls(controller, controller.get_snapshot())
-
-    # =============================================================================
-    # LIVE DASHBOARD FRAGMENT
-    # =============================================================================
-    # This fragment handles BOTH execution (stepping) AND rendering of all
-    # live-updating elements: board, metrics, charts, decision strip, events.
-    # This ensures everything stays in sync and refreshes together.
 
     running = (
         not controller.paused
@@ -140,7 +120,7 @@ def main():
         interval = None
 
     @st.fragment(run_every=interval)
-    def live_dashboard():
+    def execution_fragment():
         ctl = get_controller()
 
         # =========================================================================
@@ -176,9 +156,6 @@ def main():
         status_html = render_status_badge_inline(ctl)
         st.markdown(status_html, unsafe_allow_html=True)
 
-        # ----- METRICS ROW (updates with fragment) -----
-        render_metrics_row(ctl)
-
         # ----- MAIN ROW: Game Board (left) + Progress Chart (right) -----
         # Game board gets ~40%, progress chart gets ~60%
         game_col, progress_col = st.columns([1, 1.5], gap="medium")
@@ -207,7 +184,7 @@ def main():
                     st.markdown(event_html, unsafe_allow_html=True)
 
         with progress_col:
-            # Score Chart (main progress indicator)
+            # Score Chart (main progress indicator) - rebuilt but only updates on episode changes
             fig_score = render_score_chart(
                 snapshot.recent_scores,
                 snapshot.recent_mean_scores,
@@ -226,21 +203,142 @@ def main():
                 if outcome_html:
                     st.markdown(outcome_html, unsafe_allow_html=True)
 
-    # Render the live dashboard fragment
-    live_dashboard()
+    # Render the fragment
+    execution_fragment()
 
-    # =============================================================================
-    # INSPECT LEARNING (Full-width, below main row)
-    # =============================================================================
-    render_inspect_learning(
-        controller,
-        controller.get_snapshot(),
-        show_activations=st.session_state.get("show_activations", False),
+
+# =============================================================================
+# Fragment 2: Metrics Row (500ms cadence)
+# =============================================================================
+@st.fragment(run_every=0.5)
+def metrics_fragment():
+    """Render the metrics row at 500ms cadence (read-only)."""
+    ctl = get_controller()
+    render_metrics_row(ctl)
+
+
+# =============================================================================
+# Fragment 3: Inspect Learning (300-500ms cadence)
+# =============================================================================
+@st.fragment(run_every=0.5)
+def inspect_learning_fragment():
+    """Render the Inspect Learning section at 500ms cadence (read-only).
+    
+    Gets a fresh coherent snapshot on each refresh. Uses the retained
+    last-decision record from the snapshot (pre-action data).
+    """
+    controller = get_controller()
+    snapshot = controller.get_snapshot()
+
+    st.markdown("---")
+    st.markdown("### 🔬 Inspect Learning")
+
+    # State Vector
+    st.caption("State Representation (11D) — grouped by Danger / Direction / Food")
+    from ui.charts import render_state_vector
+    fig_sv = render_state_vector(snapshot.observation)
+    if fig_sv:
+        st.plotly_chart(
+            fig_sv,
+            width="stretch",
+            height=360,  # Explicit element height matching figure height
+            config={"displayModeBar": False},
+            key="inspect_state_vector",
+        )
+    else:
+        st.info("No observation available")
+
+    # Q-Values
+    st.caption("Action Q-Values — ▲ Executed  ◆ Preferred (greedy)  Q-gap = top-two separation")
+    from ui.charts import render_q_values
+    import numpy as np
+    fig_q = render_q_values(
+        q_values=snapshot.q_values,
+        action_executed=snapshot.action,
+        action_preferred=int(np.argmax(snapshot.q_values)) if snapshot.q_values is not None else None,
+        selection_reason=snapshot.selection_reason,
     )
+    if fig_q:
+        st.plotly_chart(
+            fig_q,
+            width="stretch",
+            height=320,  # Explicit element height matching figure height
+            config={"displayModeBar": False},
+            key="inspect_q_values",
+        )
+    else:
+        st.info("No Q-values available")
+
+    # Network Activations (gated)
+    if st.session_state.get("show_activations", False):
+        st.caption("Network Activations — recomputed with current weights")
+        from ui.charts import render_network_activations
+        fig_net = render_network_activations(snapshot, controller)
+        if fig_net:
+            st.plotly_chart(
+                fig_net,
+                width="stretch",
+                height=360,  # Explicit element height matching figure height
+                config={"displayModeBar": False},
+                key="inspect_network",
+            )
+        else:
+            st.info("Network activations unavailable")
+    else:
+        # Show a placeholder with activation toggle
+        if controller.agent is not None:
+            if st.button("🔬 Show Network Activations", key="toggle_activations", width="stretch"):
+                st.session_state.show_activations = True
+                st.rerun()
+        else:
+            st.caption("Network activations unavailable (no agent)")
+
+
+# =============================================================================
+# Main Application
+# =============================================================================
+def main():
+    controller = get_controller()
+
+    # Render Sidebar (Configuration only - no primary controls)
+    render_sidebar(controller)
 
     # =============================================================================
-    # TRAINING DIAGNOSTICS (Collapsible) - contains loss/epsilon/replay details
+    # PAGE HEADER
     # =============================================================================
+    st.markdown('<div class="sqdn-page">', unsafe_allow_html=True)
+
+    # Title
+    st.markdown("## 🐍 Snake DQN Live Training Dashboard")
+
+    # =============================================================================
+    # PRIMARY CONTROL TOOLBAR (Single Authority)
+    # =============================================================================
+    render_primary_toolbar(controller)
+
+    # Manual controls when in Manual mode and paused
+    render_manual_controls(controller, controller.get_snapshot())
+
+    # =============================================================================
+    # FRAGMENT 1: Execution + Game Board (Game Frequency)
+    # =============================================================================
+    create_execution_fragment()
+
+    # =============================================================================
+    # FRAGMENT 2: Metrics Row (500ms)
+    # =============================================================================
+    metrics_fragment()
+
+    # =============================================================================
+    # FRAGMENT 3: Inspect Learning (500ms)
+    # =============================================================================
+    inspect_learning_fragment()
+
+    # =============================================================================
+    # TRAINING DIAGNOSTICS (Collapsible) - outside fragments, renders on interaction
+    # Contains loss/epsilon/replay details - no auto-refresh needed
+    # =============================================================================
+    st.markdown("---")
     render_training_diagnostics(controller, controller.get_snapshot())
 
     st.markdown('</div>', unsafe_allow_html=True)

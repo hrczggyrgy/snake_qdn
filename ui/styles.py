@@ -581,12 +581,12 @@ def get_plotly_template():
 BOARD_SIZE = 380
 BOARD_MARGIN = {"l": 5, "r": 5, "t": 5, "b": 5}
 
-# Chart heights
-CHART_HEIGHT_MAIN = 220
-CHART_HEIGHT_SMALL = 180
-CHART_HEIGHT_STATE = 220
-CHART_HEIGHT_QVALUES = 180
-CHART_HEIGHT_NETWORK = 200
+# Chart heights - increased for readable inspection charts
+CHART_HEIGHT_MAIN = 300
+CHART_HEIGHT_SMALL = 220
+CHART_HEIGHT_STATE = 360
+CHART_HEIGHT_QVALUES = 320
+CHART_HEIGHT_NETWORK = 360
 
 # State vector labels (grouped)
 STATE_LABELS = [
