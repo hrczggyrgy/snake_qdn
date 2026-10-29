@@ -1,10 +1,13 @@
 """Backend smoke tests; these do not replace browser animation tests."""
+
 import ast
 import json
 from pathlib import Path
+
 from streamlit.testing.v1 import AppTest
-from snake_env import SnakeGameAI
+
 from agent import Agent
+from snake_env import SnakeGameAI
 
 
 def assert_clean(app):
@@ -14,7 +17,8 @@ def assert_clean(app):
 def main():
     tree = ast.parse(Path("app.py").read_text())
     charts = next(
-        node for node in ast.walk(tree)
+        node
+        for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == "live_charts_area"
     )
     source = ast.unparse(charts)
@@ -43,6 +47,7 @@ def main():
         app.button(key="step_btn").click().run(timeout=60)
         assert_clean(app)
         from game_canvas import render_game_canvas
+
         assert callable(render_game_canvas)
         state = env.get_state_for_display()
         assert state["grid_size"] == 10

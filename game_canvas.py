@@ -1,4 +1,5 @@
 """Coordinate-only Snake renderer using Streamlit Components v2."""
+
 import streamlit as st
 
 _JS = r"""
