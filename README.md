@@ -1,6 +1,8 @@
 # Snake DQN - Reinforcement Learning Dashboard
 
-A complete, modular Streamlit application where a neural network learns to play Snake via Deep Q-Learning (DQN), with live interactive visualizations of the learning dynamics, decision-making, and neural network internals.
+A modular Streamlit application where a neural network learns to play Snake via Deep Q-Learning (DQN), with live interactive visualizations of the learning dynamics, decision-making, and neural network internals.
+
+**Live Demo:** https://snakeqdn.streamlit.app/
 
 ## Features
 
@@ -14,23 +16,40 @@ A complete, modular Streamlit application where a neural network learns to play 
 - **Active State Vector**: Visual breakdown of the 11 inputs with color-coded indicators
 - **Network Architecture Diagram**: Dynamic node/edge activation diagram showing layer weights and firing signals
 - **Action Probabilities / Q-Values**: Real-time bar charts showing predicted values for [Straight, Right, Left], highlighting the chosen action
+- **Decision Snapshot**: Pre-action observation, Q-values, and selection reason (exploring/exploiting/manual)
 
 ### 📈 Learning Analytics & Metrics
 - **Performance Chart**: Dynamic plot showing Score per Episode alongside Rolling Average (50-episode window)
-- **Loss Curve**: Real-time plot of Bellman loss over training steps (log scale with smoothing)
+- **Loss Curve**: Real-time plot of Bellman loss over training steps (log scale)
 - **Exploration vs. Exploitation**: Epsilon decay tracking over episodes
-- **Score Distribution**: Histogram of achieved scores
+- **Training Metrics**: Environment steps, optimizer updates, replay buffer size, rolling averages
+
+### ⚡ Execution Policies
+- **Watch**: Deliberately paced, readable movement (configurable speed)
+- **FastTraining**: Multiple transitions per UI update within a bounded compute-time budget
+- **Evaluate**: Greedy policy, no learning, separate metrics
+- **Manual**: Human-controlled snake for testing
 
 ## Architecture
 
 ```
 snake/
-├── app.py              # Main Streamlit application
+├── app.py              # Main Streamlit application (UI, callbacks, fragments)
+├── training.py         # TrainingController - framework-independent training logic
+├── persistence.py      # Checkpoint persistence with versioning & validation
 ├── snake_env.py        # Gymnasium-compatible Snake environment
 ├── model.py            # PyTorch neural network models (Linear_QNet, QTrainer)
 ├── agent.py            # DQN Agent with experience replay
-├── test_modules.py     # Module verification tests
+├── tests/              # Focused test suites
+│   ├── test_env.py
+│   ├── test_agent.py
+│   ├── test_controller.py
+│   ├── test_checkpoint.py
+│   └── test_rendering.py
+├── test_modules.py     # Legacy module verification tests
+├── test_characterization.py  # Behavior characterization tests
 ├── requirements.txt    # Python dependencies
+├── pyproject.toml      # Tool configuration (pytest, Ruff, mypy)
 └── checkpoints/        # Model checkpoints (auto-created)
 ```
 
@@ -43,11 +62,9 @@ source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
-```
 
-Or install system-wide (with override):
-```bash
-pip install --break-system-packages -r requirements.txt
+# Install dev dependencies (for testing/linting)
+pip install -e ".[dev]"
 ```
 
 ## Usage
@@ -61,7 +78,57 @@ Then open your browser to `http://localhost:8501`
 
 ### Run Tests
 ```bash
+# All tests
+python -m pytest tests/ -v
+
+# Legacy module tests
 python test_modules.py
+
+# Characterization tests (behavior verification)
+python test_characterization.py
+
+# Run linting
+ruff check .
+
+# Run formatting check
+ruff format --check .
+```
+
+### Headless Training (Programmatic)
+```python
+from training import TrainingController, train_headless, ActivityMode, EnvConfig, AgentConfig
+
+# Configure
+controller = TrainingController(
+    env_config=EnvConfig(grid_size=20), agent_config=AgentConfig(hidden_size=256, lr=0.001)
+)
+
+# Train
+history = train_headless(controller, n_episodes=1000)
+
+# Or step manually
+controller.set_mode(ActivityMode.TRAIN)
+controller.set_paused(False)
+controller.restart_board()
+while not controller.game_over:
+    snapshot = controller.step()
+    # Use snapshot for logging/visualization
+```
+
+### Checkpoint Management
+```python
+from agent import Agent
+
+agent = Agent()
+# ... train ...
+
+# Full training state (for exact resume)
+agent.save_checkpoint("checkpoints/full.pth")
+info = agent.load_checkpoint("checkpoints/full.pth")
+
+# Weights only (for inference/deployment)
+agent.save_weights_only("checkpoints/weights.pth")
+config = agent.load_weights_only("checkpoints/weights.pth")
 ```
 
 ## Environment Details
@@ -92,6 +159,7 @@ python test_modules.py
 - **Eating food**: +10
 - **Game Over** (wall/self collision): -10
 - **Step penalty**: -0.01 (configurable, discourages wandering)
+- **Timeout** (max steps without food): -10 (truncated, not terminated)
 
 ## Neural Network Architecture
 
@@ -124,7 +192,7 @@ Input (11) → Linear(256) → ReLU → Dropout(0.1)
 ### Sidebar
 - **Environment**: Grid size, reward shaping
 - **Agent**: All hyperparameters (recreate agent to apply)
-- **Training**: Start/Stop, Reset stats, Speed control, Step mode
+- **Training**: Start/Stop, Reset stats, Execution policy (Watch/FastTraining), Step mode
 - **Checkpoints**: Save/Load model weights
 - **Display**: Grid toggle, New game
 
@@ -132,74 +200,114 @@ Input (11) → Linear(256) → ReLU → Dropout(0.1)
 - **Play/Pause**: Toggle automatic stepping
 - **Step**: Single frame advance (in step mode)
 - **Reset**: Restart current game
-- **Manual Controls**: Arrow buttons when paused
+- **Manual Controls**: Arrow buttons when paused (Manual mode)
 
-## Training Tips
+## Epsilon Decay
 
-1. **Start with defaults** - they work well for 20x20 grid
-2. **Watch epsilon decay** - should reach ~0.01 after ~500 episodes
-3. **Monitor loss** - should decrease and stabilize
-4. **Rolling average (50)** - target >10 for competent play
-5. **Save checkpoints** - use the sidebar to preserve progress
+The exploration rate ε follows:
+```
+ε(n) = max(0.01, 1.0 × 0.995ⁿ)
+```
 
-## Expected Performance
+Where n is the number of completed training episodes.
 
-| Episodes | Avg Score (50) | Behavior |
-|----------|----------------|----------|
-| 0-50 | 1-3 | Random exploration |
-| 50-200 | 3-8 | Learning basic survival |
-| 200-500 | 8-15 | Competent food seeking |
-| 500+ | 15+ | Expert play, long games |
+Approximate values:
+- 100 episodes: 0.606
+- 200 episodes: 0.367
+- 500 episodes: 0.082
+- First reaches floor (0.01) after 919 decay calls
 
-## Saving/Loading Models
+**Note**: ε reaching its floor does not imply successful learning; it only means exploration has minimized.
 
-Checkpoints save:
+## Checkpoint Details
+
+### Full Training State (exact resume)
 - Model weights (policy + target networks)
 - Optimizer state
 - Training statistics (episode, epsilon, high score, loss history)
 - Model configuration
+- Replay buffer contents
+- RNG states (Python, NumPy, PyTorch, CUDA)
+
+### Weights-Only (inference)
+- Model weights only
+- Model configuration
 
 ```python
-# Programmatic usage
 from agent import Agent
+
 agent = Agent()
+
+# Full training state (exact resume)
 agent.save_checkpoint("my_model.pth")
-info = agent.load_checkpoint("my_model.pth")
+info = agent.load_checkpoint("my_model.pth")  # Returns episode, epsilon, high_score
+
+# Weights only (inference)
+agent.save_weights_only("my_weights.pth")
+config = agent.load_weights_only("my_weights.pth")
 ```
+
+**Note**: Exact training session resumption requires restoring all counters, RNG state, replay buffer, and configuration. The full checkpoint supports this; weights-only does not.
+
+## Performance Notes
+
+The dashboard supports two execution policies:
+
+| Policy | Description | Use Case |
+|--------|-------------|----------|
+| **Watch** | One transition per UI update (configurable 0-100ms delay) | Watching the agent learn, debugging |
+| **FastTraining** | Multiple transitions per UI update (bounded by step cap & time budget) | Maximum training throughput |
+
+**Preliminary benchmarks** (5 episodes, grid_size=20):
+- Config A (hidden=256, batch=1000): ~54 trans/s, replay not yet active
+- Config B (hidden=256, batch=256): ~24 trans/s, 7.6 opt/s
+- Config C (hidden=128, batch=256): ~44 trans/s, 4.1 opt/s
+
+*These are preliminary results from 5 episodes; not sufficient for convergence claims.*
 
 ## Technical Notes
 
-- **No UI freezes**: Uses Streamlit's rerun lifecycle with `st.session_state` for state management
+- **No UI freezes**: Uses Streamlit's fragment system with `st.session_state` for state management
 - **Auto-reset**: During training, episodes automatically reset on game over
-- **Efficient rendering**: Plotly charts update incrementally
-- **Modular design**: Each component (env, model, agent) is independently testable
+- **Efficient rendering**: Canvas uses coordinate-only Plotly rendering (no RGB/PNG/base64 on normal path)
+- **Modular design**: Each component (env, model, agent, controller, persistence) is independently testable
+- **Shared training logic**: `TrainingController` used by both dashboard and headless training
+- **Epsilon-greedy policy**: Action selection uses ε-greedy; softmax(Q) is shown for visualization only, not the actual behavior policy
+- **Terminated vs Truncated**: Terminated (game over) suppresses bootstrap; Truncated (timeout) retains bootstrap
 
-## Troubleshooting
+## Limitations & Known Issues
 
-### "Module not found" errors
+- **Hosted training is resource-dependent**: CPU-only on Streamlit Cloud; no GPU acceleration
+- **Server-side Save checkpoint**: Does not download a file to the browser; saves to server filesystem
+- **Checkpoints don't include replay memory/RNG by default**: Use `agent.save_checkpoint()` for full state
+- **Loading into incompatible architecture**: Unsupported unless explicitly handled (hidden size must match)
+- **Hosted session is not durable**: State resets on redeploy or idle timeout
+- **No pretrained checkpoint provided**: Train from scratch or use weights-only for inference
+
+## Testing
+
 ```bash
-pip install --break-system-packages -r requirements.txt
-```
+# Unit tests
+python -m pytest tests/ -v
 
-### Streamlit doesn't start
-```bash
-streamlit run app.py --server.port 8501
-```
+# Legacy module tests
+python test_modules.py
 
-### Slow training
-- Reduce grid size in sidebar
-- Increase game speed (lower ms/frame)
-- Use smaller hidden size (128)
+# Behavior characterization tests
+python test_characterization.py
 
-### CUDA/GPU
-The app auto-detects CUDA. For CPU-only:
-```python
-# In agent.py, change device='auto' to device='cpu'
+# Linting
+ruff check .
+
+# Format check
+ruff format --check .
 ```
 
 ## License
 
 MIT License - Feel free to use for learning and research!
+
+[LICENSE](LICENSE)
 
 ## Credits
 
