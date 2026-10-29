@@ -6,7 +6,10 @@ and the Streamlit dashboard. It owns the environment, agent, observation,
 mode, and episode lifecycle, with no Streamlit dependencies.
 """
 
+import logging
+import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -15,6 +18,9 @@ import numpy as np
 
 from agent import Agent
 from snake_env import SnakeGameAI
+
+# Module logger
+logger = logging.getLogger(__name__)
 
 
 class EventType(Enum):
@@ -262,9 +268,39 @@ class TrainingController:
         self._max_events = 200
         self._replay_warmed_up = False
 
+        # Execution lock: serializes ALL model/optimizer mutations
+        # Must be held for: step(), advance_tick(), load_checkpoint(),
+        # restart_board(), new_run(), set_mode(), update_agent_config(), update_env_config()
+        self._lock = threading.RLock()
+
+        # Fault state: set on execution failure, prevents automatic retries
+        self._faulted: bool = False
+        self._fault_error: Exception | None = None
+        self._fault_traceback: str | None = None
+        self._fault_tick_id: int | None = None
+
+        # Execution tracing
+        self._tick_counter: int = 0
+        self._session_id: str = uuid.uuid4().hex[:8]
+
     # -------------------------------------------------------------------------
     # Properties (read-only access to internal state)
     # -------------------------------------------------------------------------
+
+    @property
+    def faulted(self) -> bool:
+        """Whether the controller has faulted and needs manual recovery."""
+        return self._faulted
+
+    @property
+    def fault_error(self) -> Exception | None:
+        """The exception that caused the fault, if any."""
+        return self._fault_error
+
+    @property
+    def session_id(self) -> str:
+        """Session correlation ID for tracing."""
+        return self._session_id
 
     @property
     def env(self) -> SnakeGameAI:
@@ -455,81 +491,88 @@ class TrainingController:
 
     def set_mode(self, mode: ActivityMode) -> None:
         """Set activity mode (TRAIN/EVALUATE/MANUAL)."""
-        old_mode = self._mode
-        self._mode = mode
-        if old_mode != mode:
-            self._emit_event(
-                EventType.MODE_CHANGE,
-                f"Mode changed: {old_mode.value} → {mode.value}",
-            )
+        with self._lock:
+            old_mode = self._mode
+            self._mode = mode
+            if old_mode != mode:
+                self._emit_event(
+                    EventType.MODE_CHANGE,
+                    f"Mode changed: {old_mode.value} → {mode.value}",
+                )
 
     def set_paused(self, paused: bool) -> None:
         """Set paused state."""
-        self._paused = paused
+        with self._lock:
+            self._paused = paused
 
     def restart_board(self) -> None:
         """Restart current game episode, keep learned weights and training history."""
-        # Ensure agent exists so _reset_episode can compute initial Q-values
-        _ = self.agent
-        self._reset_episode()
-        self._emit_event(
-            EventType.BOARD_RESTART,
-            "Board restarted",
-        )
+        with self._lock:
+            # Ensure agent exists so _reset_episode can compute initial Q-values
+            _ = self.agent
+            self._reset_episode()
+            self._emit_event(
+                EventType.BOARD_RESTART,
+                "Board restarted",
+            )
 
     def clear_history(self) -> None:
         """Clear displayed charts and statistics, keep model weights and replay buffer."""
-        if self._agent:
-            self._agent.reset_stats()
-        self._episode_id = 0
-        self._step_id = 0
-        self.clear_events()
-        self._emit_event(
-            EventType.HISTORY_CLEAR,
-            "Training history cleared",
-        )
+        with self._lock:
+            if self._agent:
+                self._agent.reset_stats()
+            self._episode_id = 0
+            self._step_id = 0
+            self.clear_events()
+            self._emit_event(
+                EventType.HISTORY_CLEAR,
+                "Training history cleared",
+            )
 
     def new_run(self) -> None:
         """Create fresh agent and replay buffer, discard current model."""
-        self._agent = self._create_agent()
-        self._env = self._create_env()
-        self._run_id += 1
-        self._episode_id = 0
-        self._step_id = 0
-        self._replay_warmed_up = False
-        self.clear_events()
-        self._reset_episode()
-        self._emit_event(
-            EventType.NEW_RUN,
-            "New training run started",
-        )
+        with self._lock:
+            self._agent = self._create_agent()
+            self._env = self._create_env()
+            self._run_id += 1
+            self._episode_id = 0
+            self._step_id = 0
+            self._replay_warmed_up = False
+            self.clear_events()
+            self._reset_episode()
+            self._emit_event(
+                EventType.NEW_RUN,
+                "New training run started",
+            )
 
     def update_env_config(self, config: EnvConfig) -> None:
         """Update environment configuration and recreate env/agent."""
-        self.env_config = config
-        self._env = self._create_env()
-        self._agent = self._create_agent()
-        self._run_id += 1
-        self._episode_id = 0
-        self._step_id = 0
-        self._replay_warmed_up = False
-        self.clear_events()
-        self._reset_episode()
-        self._emit_event(
-            EventType.MODE_CHANGE,
-            "Environment config updated — new run",
-        )
+        with self._lock:
+            self.env_config = config
+            self._env = self._create_env()
+            self._agent = self._create_agent()
+            self._run_id += 1
+            self._episode_id = 0
+            self._step_id = 0
+            self._replay_warmed_up = False
+            self.clear_events()
+            self._reset_episode()
+            self._emit_event(
+                EventType.MODE_CHANGE,
+                "Environment config updated — new run",
+            )
 
     def update_agent_config(self, config: AgentConfig) -> None:
         """Update agent configuration and recreate agent."""
-        self.agent_config = config
-        self._agent = self._create_agent()
-        self._reset_episode()
-        self.clear_events()
-        self._emit_event(
-            EventType.MODE_CHANGE,
-            "Agent config updated — new agent created",
-        )
+        with self._lock:
+            self.agent_config = config
+            self._agent = self._create_agent()
+            self._reset_episode()
+            self.clear_events()
+            self._emit_event(
+                EventType.MODE_CHANGE,
+                "Agent config updated — new agent created",
+            )
 
     # -------------------------------------------------------------------------
     # Public API - Step Operations
@@ -545,6 +588,16 @@ class TrainingController:
         Returns:
             TrainingSnapshot with pre-action decision data and post-step state.
         """
+        with self._lock:
+            return self._step_impl(action)
+
+    def _step_impl(self, action: int | None = None) -> TrainingSnapshot:
+        """Internal step implementation (must hold self._lock)."""
+        if self._faulted:
+            raise RuntimeError(
+                f"Controller faulted: {self._fault_error}. "
+                "Manual recovery required (new_run or load_checkpoint)."
+            )
         if self._game_over or self._env is None:
             return self._make_snapshot()
 
@@ -645,7 +698,7 @@ class TrainingController:
         if self._agent is not None:
             t_diag_start = time.monotonic()
             self._q_values = self._agent.get_q_values(next_obs)
-            self._action_probs = self._agent.trainer.probabilities_from_q_values(self._q_values)
+            self._action_probs = self.agent.trainer.probabilities_from_q_values(self._q_values)
             self._metrics["time_diagnostics"] += time.monotonic() - t_diag_start
 
         # --- Handle episode completion ---
@@ -691,8 +744,28 @@ class TrainingController:
 
         Raises:
             ValueError: If execution_policy is invalid or burst settings are invalid.
+            RuntimeError: If controller is faulted.
             Any exception from step()/restart_board() - caller should handle.
         """
+        with self._lock:
+            return self._advance_tick_impl(execution_policy, max_burst_steps, burst_time_budget)
+
+    def _advance_tick_impl(
+        self,
+        execution_policy: str = "Watch",
+        max_burst_steps: int = 50,
+        burst_time_budget: float = 0.05,
+    ) -> TrainingSnapshot:
+        """Internal advance_tick implementation (must hold self._lock)."""
+        if self._faulted:
+            raise RuntimeError(
+                f"Controller faulted: {self._fault_error}. "
+                "Manual recovery required (new_run or load_checkpoint)."
+            )
+
+        self._tick_counter += 1
+        tick_id = self._tick_counter
+
         # Validate execution policy
         if execution_policy not in ("Watch", "FastTraining"):
             raise ValueError(f"Unknown execution policy: {execution_policy!r}. Expected 'Watch' or 'FastTraining'.")
@@ -712,41 +785,63 @@ class TrainingController:
         if self._game_state is None:
             self.restart_board()
 
-        if execution_policy == "FastTraining":
-            import time as _time
+        try:
+            if execution_policy == "FastTraining":
+                import time as _time
 
-            max_steps = max_burst_steps
-            time_budget = burst_time_budget
-            burst_start = _time.monotonic()
-            steps_executed = 0
+                max_steps = max_burst_steps
+                time_budget = burst_time_budget
+                burst_start = _time.monotonic()
+                steps_executed = 0
 
-            while steps_executed < max_steps and not self._game_over:
-                self.step()
-                steps_executed += 1
+                while steps_executed < max_steps and not self._game_over:
+                    self._step_impl()
+                    steps_executed += 1
 
-                if _time.monotonic() - burst_start >= time_budget:
-                    break
+                    if _time.monotonic() - burst_start >= time_budget:
+                        break
 
-            # After burst, handle terminal board based on mode
-            if self._game_over:
-                if self._mode == ActivityMode.TRAIN:
+                # After burst, handle terminal board based on mode
+                if self._game_over:
+                    if self._mode == ActivityMode.TRAIN:
+                        # Training: auto-restart on terminal board
+                        self.restart_board()
+                    else:
+                        # Evaluation/Manual: pause on terminal board
+                        self.set_paused(True)
+            else:
+                # Watch mode
+                if not self._game_over:
+                    self._step_impl()
+                elif self._mode == ActivityMode.TRAIN:
                     # Training: auto-restart on terminal board
                     self.restart_board()
                 else:
-                    # Evaluation/Manual: pause on terminal board
+                    # Evaluation: pause on terminal board
                     self.set_paused(True)
-        else:
-            # Watch mode
-            if not self._game_over:
-                self.step()
-            elif self._mode == ActivityMode.TRAIN:
-                # Training: auto-restart on terminal board
-                self.restart_board()
-            else:
-                # Evaluation: pause on terminal board
-                self.set_paused(True)
+        except Exception as e:
+            # Mark controller faulted on ANY exception during execution
+            self._mark_faulted(e, tick_id)
+            raise
 
         return self.get_snapshot()
+
+    def _mark_faulted(self, error: Exception, tick_id: int | None = None) -> None:
+        """Mark controller as faulted, preserving error context."""
+        self._faulted = True
+        self._fault_error = error
+        self._fault_tick_id = tick_id
+        import traceback
+        self._fault_traceback = traceback.format_exc()
+        logger.error(
+            "Controller faulted: session=%s tick=%s error=%s",
+            self._session_id,
+            tick_id,
+            error,
+            exc_info=True,
+        )
+        # Pause to prevent automatic retries
+        self._paused = True
 
     def _select_action(self) -> tuple[int, str, np.ndarray | None]:
         """Select action based on current mode and agent policy."""
@@ -924,7 +1019,8 @@ class TrainingController:
 
     def get_snapshot(self) -> TrainingSnapshot:
         """Get current state snapshot without stepping."""
-        return self._make_snapshot()
+        with self._lock:
+            return self._make_snapshot()
 
     # -------------------------------------------------------------------------
     # Checkpoint Operations
@@ -932,23 +1028,163 @@ class TrainingController:
 
     def save_checkpoint(self, filepath: str) -> None:
         """Save agent checkpoint."""
-        if self._agent:
-            self._agent.save_checkpoint(filepath)
+        with self._lock:
+            if self._agent:
+                self._agent.save_checkpoint(filepath)
 
     def load_checkpoint(self, filepath: str) -> dict[str, Any]:
-        """Load agent checkpoint."""
-        if self._agent is None:
-            self._agent = self._create_agent()
-        info = self._agent.load_checkpoint(filepath)
-        # Sync internal counters
-        self._episode_id = self._agent.n_games
-        self.clear_events()
-        self._replay_warmed_up = self._agent.memory.is_ready(self._agent.batch_size)
-        self._emit_event(
-            EventType.CHECKPOINT_LOAD,
-            f"Loaded checkpoint: ep {info.get('episode', 0)}, ε={info.get('epsilon', 1.0):.3f}",
+        """
+        Load agent checkpoint transactionally.
+
+        Loads into a candidate agent first, validates architecture and optimizer state,
+        then atomically replaces the live agent. If validation fails, the live agent
+        is unchanged.
+
+        Returns:
+            Checkpoint metadata dict.
+
+        Raises:
+            FileNotFoundError: If checkpoint doesn't exist.
+            ValueError: If architecture mismatch or invalid optimizer state.
+            RuntimeError: If controller is faulted.
+        """
+        with self._lock:
+            if self._faulted:
+                raise RuntimeError(
+                    f"Controller faulted: {self._fault_error}. "
+                    "Manual recovery required (new_run or load_checkpoint)."
+                )
+
+            # Create candidate agent
+            candidate_agent = self._create_agent()
+
+            # Load checkpoint into candidate
+            try:
+                info = candidate_agent.load_checkpoint(filepath)
+            except Exception as e:
+                raise ValueError(f"Failed to load checkpoint: {e}") from e
+
+            # Validate architecture matches current config
+            if not self._validate_agent_architecture(candidate_agent):
+                raise ValueError(
+                    f"Checkpoint architecture mismatch: "
+                    f"expected {self.agent_config}, "
+                    f"got hidden={candidate_agent.trainer.model.hidden_size}"
+                )
+
+            # Validate optimizer state (Adam must have exp_avg and exp_avg_sq for all params)
+            self._validate_optimizer_state(candidate_agent)
+
+            # All validations passed - atomically swap
+            self._agent = candidate_agent
+            # Sync internal counters
+            self._episode_id = self._agent.n_games
+            self.clear_events()
+            self._replay_warmed_up = self._agent.memory.is_ready(self._agent.batch_size)
+            self._emit_event(
+                EventType.CHECKPOINT_LOAD,
+                f"Loaded checkpoint: ep {info.get('episode', 0)}, ε={info.get('epsilon', 1.0):.3f}",
+            )
+            return info
+
+    def _validate_agent_architecture(self, agent: Agent) -> bool:
+        """Validate that agent architecture matches current config."""
+        model = agent.trainer.model
+        return (
+            model.input_size == self.agent_config.input_size
+            and model.hidden_size == self.agent_config.hidden_size
+            and model.output_size == self.agent_config.output_size
         )
-        return info
+
+    def _validate_optimizer_state(self, agent: Agent) -> None:
+        """
+        Validate that Adam optimizer state is complete and consistent.
+
+        Adam requires 'exp_avg' and 'exp_avg_sq' for each parameter.
+        This catches incomplete/mismatched optimizer state from checkpoints.
+        """
+        optimizer = agent.trainer.optimizer
+        state = optimizer.state_dict()["state"]
+
+        # If optimizer has never been stepped, state may be empty (legitimate)
+        if not state:
+            return
+
+        param_groups = optimizer.state_dict()["param_groups"]
+        expected_params = sum(len(pg["params"]) for pg in param_groups)
+
+        for param_id, param_state in state.items():
+            # Check required Adam fields
+            if "exp_avg" not in param_state:
+                raise ValueError(
+                    f"Optimizer state missing 'exp_avg' for parameter {param_id}. "
+                    "Checkpoint may be corrupted or from incompatible optimizer."
+                )
+            if "exp_avg_sq" not in param_state:
+                raise ValueError(
+                    f"Optimizer state missing 'exp_avg_sq' for parameter {param_id}. "
+                    "Checkpoint may be corrupted or from incompatible optimizer."
+                )
+
+            # Validate shapes match parameter shapes
+            # Note: exact shape validation requires mapping param_id to actual param
+            # This is a basic sanity check
+
+        if len(state) != expected_params:
+            raise ValueError(
+                f"Optimizer state has {len(state)} parameters, expected {expected_params}. "
+                "Checkpoint may be from different model architecture."
+            )
+
+    def recover_from_fault(self, strategy: str = "new_run") -> None:
+        """
+        Recover from a faulted state.
+
+        Args:
+            strategy: "new_run" to create fresh agent, "load_checkpoint" to load from file
+                     (requires filepath to be set via config or default)
+        """
+        with self._lock:
+            if not self._faulted:
+                return  # Not faulted, nothing to do
+
+            if strategy == "new_run":
+                self._agent = self._create_agent()
+                self._env = self._create_env()
+                self._run_id += 1
+                self._episode_id = 0
+                self._step_id = 0
+                self._replay_warmed_up = False
+                self.clear_events()
+                self._reset_episode()
+                self._faulted = False
+                self._fault_error = None
+                self._fault_traceback = None
+                self._fault_tick_id = None
+                self._emit_event(
+                    EventType.NEW_RUN,
+                    "Recovered from fault — new training run started",
+                )
+            elif strategy == "load_checkpoint":
+                # Would need a filepath; for now just new_run
+                self._agent = self._create_agent()
+                self._env = self._create_env()
+                self._run_id += 1
+                self._episode_id = 0
+                self._step_id = 0
+                self._replay_warmed_up = False
+                self.clear_events()
+                self._reset_episode()
+                self._faulted = False
+                self._fault_error = None
+                self._fault_traceback = None
+                self._fault_tick_id = None
+                self._emit_event(
+                    EventType.NEW_RUN,
+                    "Recovered from fault — new training run started",
+                )
+            else:
+                raise ValueError(f"Unknown recovery strategy: {strategy}")
 
     # -------------------------------------------------------------------------
     # Cleanup
@@ -983,6 +1219,13 @@ def train_headless(
     controller.set_paused(False)
 
     for episode in range(n_episodes):
+        # Check for faulted state
+        if controller.faulted:
+            raise RuntimeError(
+                f"Controller faulted at tick {controller._fault_tick_id}: {controller.fault_error}. "
+                "Call controller.recover_from_fault() before continuing."
+            )
+
         # Start new episode
         controller.restart_board()
 
@@ -1039,6 +1282,12 @@ def evaluate_headless(
     max_steps_per_episode: int = 2000,
 ) -> dict[str, Any]:
     """Evaluate agent performance using TrainingController."""
+    if controller.faulted:
+        raise RuntimeError(
+            f"Controller faulted at tick {controller._fault_tick_id}: {controller.fault_error}. "
+            "Call controller.recover_from_fault() before continuing."
+        )
+
     controller.set_mode(ActivityMode.EVALUATE)
     controller.set_paused(False)
 

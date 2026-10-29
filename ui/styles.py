@@ -265,7 +265,7 @@ COMPONENT_CSS = """
     white-space: nowrap;
 }
 
-.sqdn-decision-strip .sqdn-q-values {
+.sqdn-decision-strip .sqdn-decision-q-values {
     color: var(--sqdn-text-muted);
     font-size: var(--sqdn-text-xs);
     min-width: 0;
@@ -419,7 +419,7 @@ COMPONENT_CSS = """
     height: 220px;
 }
 
-.sqdn-q-values {
+.sqdn-q-values-chart {
     height: 180px;
 }
 

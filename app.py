@@ -12,7 +12,7 @@ import logging
 import streamlit as st
 
 from training import ActivityMode, TrainingController
-from ui.charts import render_epsilon_chart, render_loss_chart, render_score_chart
+from ui.charts import render_score_chart
 from ui.controls import (
     render_manual_controls,
     render_primary_toolbar,
@@ -179,10 +179,11 @@ def main():
         # ----- METRICS ROW (updates with fragment) -----
         render_metrics_row(ctl)
 
-        # ----- LEFT COLUMN: Game Board + Decision Strip + Latest Event -----
-        left_col, right_col = st.columns([3, 2], gap="medium")
+        # ----- MAIN ROW: Game Board (left) + Progress Chart (right) -----
+        # Game board gets ~40%, progress chart gets ~60%
+        game_col, progress_col = st.columns([1, 1.5], gap="medium")
 
-        with left_col:
+        with game_col:
             # Game Board
             if snapshot.game_state:
                 fig = render_game_board(snapshot, show_grid=st.session_state.get("show_grid", True))
@@ -194,33 +195,19 @@ def main():
                     key="live_game_board",
                 )
 
-            # Status caption
-            if ctl.agent is not None and snapshot.game_state:
-                mode_icon = {"train": "🧠", "evaluate": "📊", "manual": "👤"}.get(ctl.mode.value, "❓")
-                status = "Running" if not ctl.paused else "Paused"
-                st.caption(
-                    f"{mode_icon} {ctl.mode.value.title()} · {status} · "
-                    f"Ep {ctl.agent.n_games} · "
-                    f"Score {snapshot.game_state['score']} · "
-                    f"Best {ctl.agent.high_score} · "
-                    f"ε {ctl.agent.epsilon:.3f}"
-                )
-
-            # Last Decision Strip
-            st.markdown("---")
+            # Last Decision Strip (compact)
             decision_html = render_decision_strip_with_disclosure(snapshot)
             if decision_html:
                 st.markdown(decision_html, unsafe_allow_html=True)
 
-            # Latest Event
+            # Latest Event (single line)
             if hasattr(snapshot, "recent_events") and snapshot.recent_events:
                 event_html = render_latest_event([e.to_dict() for e in snapshot.recent_events])
                 if event_html:
                     st.markdown(event_html, unsafe_allow_html=True)
 
-        # ----- RIGHT COLUMN: Score Chart + Episode Outcome Summary -----
-        with right_col:
-            # Score Chart
+        with progress_col:
+            # Score Chart (main progress indicator)
             fig_score = render_score_chart(
                 snapshot.recent_scores,
                 snapshot.recent_mean_scores,
@@ -239,40 +226,21 @@ def main():
                 if outcome_html:
                     st.markdown(outcome_html, unsafe_allow_html=True)
 
-            # Loss & Epsilon Charts (compact)
-            lcol, ecol = st.columns(2, gap="small")
-            with lcol:
-                fig_loss = render_loss_chart(snapshot.recent_loss, snapshot.optimizer_steps)
-                st.plotly_chart(
-                    fig_loss,
-                    width="stretch",
-                    config={"displayModeBar": False},
-                    key="live_loss_chart",
-                )
-            with ecol:
-                fig_eps = render_epsilon_chart(snapshot.recent_epsilon, snapshot.episode)
-                st.plotly_chart(
-                    fig_eps,
-                    width="stretch",
-                    config={"displayModeBar": False},
-                    key="live_epsilon_chart",
-                )
-
     # Render the live dashboard fragment
     live_dashboard()
 
     # =============================================================================
-    # STATIC SECTIONS (below the live fragment)
+    # INSPECT LEARNING (Full-width, below main row)
     # =============================================================================
-
-    # FULL-WIDTH INSPECT LEARNING
     render_inspect_learning(
         controller,
         controller.get_snapshot(),
         show_activations=st.session_state.get("show_activations", False),
     )
 
-    # TRAINING DIAGNOSTICS (Collapsible)
+    # =============================================================================
+    # TRAINING DIAGNOSTICS (Collapsible) - contains loss/epsilon/replay details
+    # =============================================================================
     render_training_diagnostics(controller, controller.get_snapshot())
 
     st.markdown('</div>', unsafe_allow_html=True)

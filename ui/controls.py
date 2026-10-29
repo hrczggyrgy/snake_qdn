@@ -13,184 +13,150 @@ from training import ActivityMode, AgentConfig, EnvConfig, TrainingController
 def render_primary_toolbar(controller: TrainingController) -> None:
     """Render the single primary control toolbar in the main content area.
 
-    This replaces duplicated controls in sidebar. Contains:
-    - Activity mode selector (Train/Evaluate/Manual)
-    - Execution policy (Watch/FastTraining) for Train/Eval
-    - Speed preset for Watch mode
-    - Start/Resume/Pause button (context-aware)
-    - Step Once button (when paused)
-    - Restart Board button
-    - Status badge
+    Uses native Streamlit containers/columns for proper layout.
     """
-    st.markdown('<div class="sqdn-toolbar">', unsafe_allow_html=True)
+    with st.container():
+        # Row 1: Mode selector + Execution policy + Speed
+        mode_col, policy_col, speed_col = st.columns([1, 1, 1], gap="small")
 
-    # Activity Mode Selector
-    mode_options = ["Train", "Evaluate", "Manual"]
-    mode_labels = {
-        "Train": "🧠 Train — Agent learns while playing",
-        "Evaluate": "📊 Evaluate — Greedy policy, no learning",
-        "Manual": "👤 Manual — You control the snake",
-    }
-
-    current_mode = controller.mode.value.title()
-    try:
-        mode_index = mode_options.index(current_mode)
-    except ValueError:
-        mode_index = 0
-
-    new_mode = st.radio(
-        "Mode",
-        mode_options,
-        index=mode_index,
-        format_func=lambda x: mode_labels[x],
-        horizontal=True,
-        key="toolbar_mode",
-        label_visibility="collapsed",
-    )
-
-    if new_mode != current_mode:
-        mode_map = {"Train": ActivityMode.TRAIN, "Evaluate": ActivityMode.EVALUATE, "Manual": ActivityMode.MANUAL}
-        controller.set_mode(mode_map[new_mode])
-        # Mode change does NOT start execution - user must press Start/Resume
-        controller.set_paused(True)
-        st.rerun()
-
-    # Execution Policy (Train/Evaluate only)
-    if controller.mode != ActivityMode.MANUAL:
-        policy_options = ["Watch", "FastTraining"]
-        policy_labels = {
-            "Watch": "👁️ Watch — Deliberately paced, readable movement",
-            "FastTraining": "⚡ FastTraining — Multiple transitions per UI update",
-        }
-
-        current_policy = st.session_state.get("execution_policy", "Watch")
-        try:
-            policy_index = policy_options.index(current_policy)
-        except ValueError:
-            policy_index = 0
-
-        new_policy = st.radio(
-            "Policy",
-            policy_options,
-            index=policy_index,
-            format_func=lambda x: policy_labels[x],
-            horizontal=True,
-            key="toolbar_policy",
-            label_visibility="collapsed",
-        )
-        st.session_state.execution_policy = new_policy
-
-        if new_policy == "Watch":
-            speed_options = {
-                "Watch": 0.1,
-                "Normal": 0.05,
-                "Fast": 0.01,
-                "Max": 0.0,
-            }
-            current_speed = st.session_state.get("speed_preset", "Watch")
+        with mode_col:
+            mode_options = ["Train", "Evaluate", "Manual"]
+            current_mode = controller.mode.value.title()
             try:
-                speed_index = list(speed_options.keys()).index(current_speed)
+                mode_index = mode_options.index(current_mode)
             except ValueError:
-                speed_index = 0
+                mode_index = 0
 
-            new_speed = st.radio(
-                "Speed",
-                list(speed_options.keys()),
-                index=speed_index,
-                horizontal=True,
-                key="toolbar_speed",
-                label_visibility="collapsed",
+            new_mode = st.selectbox(
+                "Mode",
+                mode_options,
+                index=mode_index,
+                key="toolbar_mode",
+                help="Train: Agent learns while playing\nEvaluate: Greedy policy, no learning\nManual: You control the snake",
             )
-            st.session_state.speed_preset = new_speed
-            st.session_state.speed = speed_options[new_speed]
-        else:
-            st.session_state.speed = 0.0
-            c1, c2 = st.columns(2)
-            with c1:
-                st.session_state.max_burst_steps = st.number_input(
-                    "Max steps/burst",
-                    1, 1000,
-                    st.session_state.get("max_burst_steps", 50),
-                    step=10,
-                    key="toolbar_burst_steps",
-                    help="Maximum transitions per UI update burst",
+
+            if new_mode != current_mode:
+                mode_map = {"Train": ActivityMode.TRAIN, "Evaluate": ActivityMode.EVALUATE, "Manual": ActivityMode.MANUAL}
+                controller.set_mode(mode_map[new_mode])
+                controller.set_paused(True)
+                st.rerun()
+
+        with policy_col:
+            if controller.mode != ActivityMode.MANUAL:
+                policy_options = ["Watch", "Train fast"]
+                current_policy = st.session_state.get("execution_policy", "Watch")
+                try:
+                    policy_index = policy_options.index(current_policy)
+                except ValueError:
+                    policy_index = 0
+
+                new_policy = st.selectbox(
+                    "Execution",
+                    policy_options,
+                    index=policy_index,
+                    key="toolbar_policy",
+                    help="Watch: Deliberately paced, readable movement\nTrain fast: Multiple transitions per UI update",
                 )
-            with c2:
-                st.session_state.burst_time_budget = st.number_input(
-                    "Burst budget (ms)",
-                    5, 200,
-                    int(st.session_state.get("burst_time_budget", 0.05) * 1000),
-                    step=5,
-                    key="toolbar_burst_budget",
-                    help="Target compute time per burst",
-                ) / 1000.0
-
-    # Main Control Buttons
-    is_paused = controller.paused
-
-    # Start/Resume/Pause Button
-    if controller.mode == ActivityMode.TRAIN:
-        if is_paused:
-            if controller.agent is None or controller.agent.n_games == 0:
-                btn_label = "▶️ Start Training"
-                btn_type = "primary"
+                st.session_state.execution_policy = new_policy
             else:
-                btn_label = "▶️ Resume Training"
-                btn_type = "primary"
-        else:
-            btn_label = "⏸️ Pause Training"
-            btn_type = "secondary"
-    elif controller.mode == ActivityMode.EVALUATE:
-        if is_paused:
-            if controller.agent is None or controller.agent.n_games == 0:
-                btn_label = "▶️ Start Evaluation"
-                btn_type = "primary"
-            else:
-                btn_label = "▶️ Resume Evaluation"
-                btn_type = "primary"
-        else:
-            btn_label = "⏸️ Pause Evaluation"
-            btn_type = "secondary"
-    else:  # MANUAL
-        if is_paused:
-            btn_label = "▶️ Resume Manual"
-            btn_type = "primary"
-        else:
-            btn_label = "⏸️ Pause Manual"
-            btn_type = "secondary"
+                st.selectbox("Execution", ["Manual"], disabled=True, key="toolbar_policy_manual")
 
-    if st.button(btn_label, type=btn_type, key="toolbar_play_pause", width="stretch"):
-        if is_paused:
-            # Initialize board if not already initialized or if game over
-            if controller.game_state is None or controller.game_over:
+        with speed_col:
+            if controller.mode != ActivityMode.MANUAL:
+                policy = st.session_state.get("execution_policy", "Watch")
+                if policy == "Watch":
+                    speed_options = ["Slow", "Normal", "Fast"]
+                    current_speed = st.session_state.get("speed_preset", "Normal")
+                    try:
+                        speed_index = speed_options.index(current_speed)
+                    except ValueError:
+                        speed_index = 1
+
+                    new_speed = st.selectbox(
+                        "Speed",
+                        speed_options,
+                        index=speed_index,
+                        key="toolbar_speed",
+                        help="Slow: 0.1s/step\nNormal: 0.05s/step\nFast: 0.01s/step",
+                    )
+                    st.session_state.speed_preset = new_speed
+                    st.session_state.speed = {"Slow": 0.1, "Normal": 0.05, "Fast": 0.01}[new_speed]
+                else:
+                    st.session_state.speed = 0.0
+                    st.selectbox("Speed", ["N/A (burst)"], disabled=True, key="toolbar_speed_burst")
+            else:
+                st.selectbox("Speed", ["N/A"], disabled=True, key="toolbar_speed_manual")
+
+        # Row 2: Action buttons grouped together
+        is_paused = controller.paused
+        btn_col1, btn_col2, btn_col3 = st.columns([2, 1, 1], gap="small")
+
+        with btn_col1:
+            # Start/Resume/Pause Button
+            if controller.mode == ActivityMode.TRAIN:
+                if is_paused:
+                    if controller.agent is None or controller.agent.n_games == 0:
+                        btn_label, btn_type = "▶️ Start Training", "primary"
+                    else:
+                        btn_label, btn_type = "▶️ Resume Training", "primary"
+                else:
+                    btn_label, btn_type = "⏸️ Pause Training", "secondary"
+            elif controller.mode == ActivityMode.EVALUATE:
+                if is_paused:
+                    if controller.agent is None or controller.agent.n_games == 0:
+                        btn_label, btn_type = "▶️ Start Evaluation", "primary"
+                    else:
+                        btn_label, btn_type = "▶️ Resume Evaluation", "primary"
+                else:
+                    btn_label, btn_type = "⏸️ Pause Evaluation", "secondary"
+            else:  # MANUAL
+                if is_paused:
+                    btn_label, btn_type = "▶️ Resume Manual", "primary"
+                else:
+                    btn_label, btn_type = "⏸️ Pause Manual", "secondary"
+
+            if st.button(btn_label, type=btn_type, key="toolbar_play_pause", width="stretch"):
+                if is_paused:
+                    if controller.game_state is None or controller.game_over:
+                        controller.restart_board()
+                    controller.set_paused(False)
+                else:
+                    controller.set_paused(True)
+                st.rerun()
+
+        with btn_col2:
+            # Step Once (only when paused)
+            if is_paused:
+                if st.button("⏭️ Step Once", key="toolbar_step", width="stretch", help="Advance exactly one transition"):
+                    _handle_step_once(controller)
+                    st.rerun()
+            else:
+                st.button("⏭️ Step Once", key="toolbar_step_disabled", width="stretch", disabled=True)
+
+        with btn_col3:
+            # Restart Board
+            if st.button("🔄 Restart Board", key="toolbar_restart", width="stretch",
+                         help="Restart current game, keep learned weights and training history"):
                 controller.restart_board()
-            controller.set_paused(False)
-        else:
+                if "last_decision" in st.session_state:
+                    del st.session_state.last_decision
+                st.rerun()
+
+        # Row 3: Status badge (compact)
+        st.caption(render_status_badge_inline(controller), unsafe_allow_html=True)
+
+
+def _handle_step_once(controller: TrainingController) -> None:
+    """Handle Step Once button press with explicit terminal board behavior."""
+    if controller.game_over:
+        if controller.mode == ActivityMode.TRAIN:
+            controller.restart_board()
+        elif controller.mode == ActivityMode.EVALUATE:
             controller.set_paused(True)
-        st.rerun()
-
-    # Step Once (only when paused)
-    if is_paused:
-        if st.button("⏭️ Step Once", key="toolbar_step", width="stretch"):
-            _handle_step_once(controller)
-            st.rerun()
+        else:  # MANUAL
+            controller.restart_board()
     else:
-        st.button("⏭️ Step Once", key="toolbar_step_disabled", width="stretch", disabled=True)
-
-    # Restart Board
-    if st.button("🔄 Restart Board", key="toolbar_restart", width="stretch",
-                 help="Restart current game, keep learned weights and training history"):
-        controller.restart_board()
-        # Clear last decision on board restart
-        if "last_decision" in st.session_state:
-            del st.session_state.last_decision
-        st.rerun()
-
-    # Status Badge
-    status_html = render_status_badge_inline(controller)
-    st.markdown(status_html, unsafe_allow_html=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)
+        controller.step()
 
 
 def _handle_step_once(controller: TrainingController) -> None:

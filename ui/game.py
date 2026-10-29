@@ -246,7 +246,7 @@ def render_decision_strip(snapshot: TrainingSnapshot) -> str | None:
                 <span class="sqdn-label {reason_class}">{label}</span>
                 <span class="sqdn-detail">{detail}</span>
             </div>
-            <div class="sqdn-q-values">
+            <div class="sqdn-decision-q-values">
                 Q: {q_parts}
             </div>
         </div>
@@ -361,7 +361,7 @@ def render_outcome_summary(termination_counts: dict[str, int], window: int = 50)
 
     Args:
         termination_counts: Dict with keys wall, self, timeout, victory
-        window: Total episodes in the window (denominator)
+        window: Maximum episodes in the window (denominator is actual completed)
     """
     if not termination_counts or sum(termination_counts.values()) == 0:
         return None
@@ -379,27 +379,28 @@ def render_outcome_summary(termination_counts: dict[str, int], window: int = 50)
         "victory": "Victory",
     }
 
-    total = sum(termination_counts.values())
+    completed = sum(termination_counts.values())
+    denominator = max(completed, window) if completed >= window else completed
 
     # Build stacked bar segments
     segments = []
     for reason in ["wall", "self", "timeout", "victory"]:
         count = termination_counts.get(reason, 0)
         if count > 0:
-            pct = count / window * 100
+            pct = count / denominator * 100
             segments.append(
                 f'<div class="sqdn-outcome-segment" style="background: {colors[reason]}; width: {pct}%;">'
                 f'{labels[reason]}: {count}'
                 f'</div>'
             )
 
-    # Remaining (ongoing/incomplete)
-    remaining = window - total
+    # Remaining (incomplete to fill window)
+    remaining = max(0, window - completed)
     if remaining > 0:
-        pct = remaining / window * 100
+        pct = remaining / denominator * 100
         segments.append(
             f'<div class="sqdn-outcome-segment" style="background: rgba(100,100,100,0.3); width: {pct}%;">'
-            f'Ongoing: {remaining}'
+            f'Pending: {remaining}'
             f'</div>'
         )
 
@@ -420,7 +421,7 @@ def render_outcome_summary(termination_counts: dict[str, int], window: int = 50)
         legend_items.append(
             f'<span class="sqdn-outcome-legend-item">'
             f'<span class="sqdn-outcome-legend-swatch" style="background: rgba(100,100,100,0.3);"></span>'
-            f'Ongoing: {remaining}'
+            f'Pending: {remaining}'
             f'</span>'
         )
 
@@ -432,7 +433,7 @@ def render_outcome_summary(termination_counts: dict[str, int], window: int = 50)
         <div class="sqdn-outcome-bar">{bar_html}</div>
         <div class="sqdn-outcome-legend">{legend_html}</div>
         <div style="font-size: 0.75rem; color: var(--sqdn-text-muted); margin-top: 0.25rem;">
-            Denominator: {window} episodes · Completed: {total} · Showing termination reasons for completed episodes
+            Completed: {completed} · Showing termination reasons for completed episodes
         </div>
     </div>
     """
@@ -444,38 +445,19 @@ def render_outcome_summary(termination_counts: dict[str, int], window: int = 50)
 # =============================================================================
 
 def render_metrics_row(controller) -> None:
-    """Render compact summary metrics row."""
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    """Render compact summary metrics row (5 key metrics)."""
+    col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
         st.metric("Episode", f"{controller.episode}")
     with col2:
         st.metric("Score", f"{controller.score}")
     with col3:
-        st.metric("High Score", f"{controller.high_score}")
+        st.metric("Best Score", f"{controller.high_score}")
+    with col4:
+        st.metric("Avg (50)", f"{controller.agent.mean_scores_history[-1] if controller.agent and controller.agent.mean_scores_history else 0:.1f}")
     with col4:
         st.metric("ε (Epsilon)", f"{controller.epsilon:.3f}")
-    with col5:
-        st.metric("Env Steps", f"{controller.total_env_steps:,}")
-    with col6:
-        st.metric("Opt Steps", f"{controller.optimizer_steps:,}")
-
-    # Second row with replay/metrics
-    if controller.agent:
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            avg50 = controller.agent.mean_scores_history[-1] if controller.agent.mean_scores_history else 0
-            st.metric("Avg(50)", f"{avg50:.1f}")
-        with col2:
-            mem_size = len(controller.agent.memory) if controller.agent else 0
-            st.metric("Replay Size", f"{mem_size:,}")
-        with col3:
-            replay_active = controller.agent.memory.is_ready(controller.agent.batch_size) if controller.agent else False
-            st.metric("Replay Ready", "✅" if replay_active else "⏳")
-        with col4:
-            metrics = controller.get_metrics()
-            tps = metrics.get("transitions_per_sec", 0)
-            st.metric("Transitions/s", f"{tps:.1f}")
 
 
 # =============================================================================
