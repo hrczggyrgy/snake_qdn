@@ -65,6 +65,8 @@ class EvaluationRecord:
     mean_score: float
     std_score: float
     eval_time: float = 0.0
+    cutoff_reason: str = "completed"
+    requested_episodes: int = 0
     
     @property
     def completed_episodes(self) -> int:
@@ -224,9 +226,9 @@ class ExperimentRunner:
         Args:
             agent: The agent to evaluate (uses greedy policy)
             env_config: Environment configuration
-            n_episodes: Number of evaluation episodes
+            n_episodes: Number of evaluation episodes to attempt
             max_steps_per_episode: Step limit per episode
-            episode_seeds: Optional list of seeds for each episode (must be provided for reproducibility)
+            episode_seeds: List of seeds for each episode (must be provided for reproducibility)
             deadline: Optional wall-clock deadline (monotonic time). If exceeded, evaluation stops.
         
         Returns:
@@ -259,6 +261,7 @@ class ExperimentRunner:
         
         scores = []
         used_seeds = []
+        horizon_cutoff_count = 0
         cutoff_reason = "completed"
         eval_start = time.monotonic()
         
@@ -271,7 +274,6 @@ class ExperimentRunner:
                 # Seed this episode's environment
                 ep_seed = episode_seeds[i]
                 eval_env.seed(ep_seed)
-                used_seeds.append(ep_seed)
                 
                 state, _ = eval_env.reset()
                 done = False
@@ -290,7 +292,14 @@ class ExperimentRunner:
                 if cutoff_reason == "deadline_exceeded":
                     break
                 
-                scores.append(info["score"])
+                # Episode completed (either terminated, truncated, or horizon reached)
+                if terminated or truncated:
+                    # Actual episode completion
+                    scores.append(info["score"])
+                    used_seeds.append(episode_seeds[i])
+                else:
+                    # Horizon cutoff - record but don't count as completed
+                    pass  # Don't record seed or score for horizon cutoff
             
         except KeyboardInterrupt:
             cutoff_reason = "interrupted"
@@ -306,6 +315,10 @@ class ExperimentRunner:
         eval_time = time.monotonic() - eval_start
         completed_episodes = len(scores)
         
+        # Determine final cutoff reason
+        if cutoff_reason == "completed" and n_episodes > len(scores):
+            cutoff_reason = "horizon_cutoff"
+        
         return EvaluationRecord(
             training_transition=0,  # Set by caller
             episode_seeds=used_seeds,
@@ -313,6 +326,8 @@ class ExperimentRunner:
             mean_score=float(np.mean(scores)) if scores else 0.0,
             std_score=float(np.std(scores)) if scores else 0.0,
             eval_time=eval_time,
+            cutoff_reason=cutoff_reason,
+            requested_episodes=n_episodes,
         ), cutoff_reason
 
     def run_experiment(self, config: ExperimentConfig, eval_every: int = 500,
@@ -367,18 +382,25 @@ class ExperimentRunner:
 
         # Track evaluations
         evaluation_history: list[EvaluationRecord] = []
-        periodic_eval_times = []
         metrics = controller.get_metrics()
         last_eval_transition = metrics.get("training_transitions", 0)
         
-        # Calculate maximum number of periodic evaluations possible
-        max_transitions = config.budget.max_env_transitions or 1_000_000
-        max_evaluations = max(1, max_transitions // max(eval_every, 1)) + 2
-        periodic_seed_panels = self._derive_periodic_seeds(
-            config.seed + 1, max_evaluations, eval_episodes
-        )
+        # Calculate maximum number of periodic evaluations possible (for seed allocation)
+        # Only allocate seeds if eval_every > 0
+        periodic_seed_panels = []
         panel_idx = 0
-
+        if eval_every > 0:
+            max_transitions = config.budget.max_env_transitions or 1_000_000
+            max_evaluations = max(1, max_transitions // max(eval_every, 1)) + 2
+            periodic_seed_panels = self._derive_periodic_seeds(
+                config.seed + 1, max_evaluations, eval_episodes
+            )
+            panel_idx = 0
+        
+        # Reserve capacity for final evaluation (approximate)
+        total_budget = config.budget.max_env_transitions or 1_000_000
+        final_eval_transition_budget = min(total_budget // 4, eval_episodes * 2 * 200, 2000)
+        
         # Main training loop
         try:
             controller.restart_board()  # Start first episode
@@ -388,9 +410,16 @@ class ExperimentRunner:
                 env_transitions = metrics.get("env_transitions", 0)
                 training_transitions = metrics.get("training_transitions", 0)
                 optimizer_steps = metrics.get("optimizer_updates", 0)
-                wall_time = metrics.get("total_session_time", 0)
+                # Use actual elapsed wall time for budget checking
+                wall_time = time.monotonic() - start_time
                 episodes = controller.episode
 
+                # Check if we need to reserve budget for final evaluation
+                if config.budget.max_env_transitions is not None:
+                    remaining_for_final = max(0, config.budget.max_env_transitions - env_transitions)
+                else:
+                    remaining_for_final = 0
+                
                 if config.budget.is_exhausted(env_transitions, wall_time, optimizer_steps, episodes):
                     stopped_reason = "budget_exhausted"
                     break
@@ -407,52 +436,65 @@ class ExperimentRunner:
                     if verbose:
                         print(f"  Running evaluation at training transition {training_transitions}...")
                     
-                    # Check if we have enough budget for evaluation
-                    # Reserve ~1 transition per episode per eval as a rough estimate
-                    eval_budget_reserve = eval_episodes * 10
-                    if config.budget.max_env_transitions is not None:
-                        if env_transitions + eval_budget_reserve >= config.budget.max_env_transitions:
+                    eval_start = time.monotonic()
+                    # Get seeds for this periodic evaluation
+                    if panel_idx >= len(periodic_seed_panels):
+                        # Derive more if needed
+                        extra_panels = self._derive_periodic_seeds(
+                            config.seed + 2 + panel_idx, 10, eval_episodes
+                        )
+                        periodic_seed_panels.extend(extra_panels)
+                    
+                    ep_seeds = periodic_seed_panels[panel_idx]
+                    panel_idx += 1
+                    
+                    # Check remaining wall time budget for evaluation
+                    remaining_time = None
+                    if config.budget.max_wall_time_seconds is not None:
+                        elapsed = time.monotonic() - start_time
+                        remaining_time = config.budget.max_wall_time_seconds - elapsed - 0.1
+                        # Skip if less than 1 second remaining
+                        if remaining_time < 1.0:
                             if verbose:
-                                print(f"  Skipping periodic evaluation: insufficient budget remaining")
+                                print(f"  Skipping periodic evaluation: insufficient wall time budget")
+                            last_eval_transition = training_transitions
                         else:
-                            eval_start = time.monotonic()
-                            # Get seeds for this periodic evaluation
-                            if panel_idx >= len(periodic_seed_panels):
-                                # Derive more if needed (shouldn't happen with proper max_evaluations)
-                                extra_panels = self._derive_periodic_seeds(
-                                    config.seed + 2 + panel_idx, 10, eval_episodes
-                                )
-                                periodic_seed_panels.extend(extra_panels)
-                            
-                            ep_seeds = periodic_seed_panels[panel_idx]
-                            panel_idx += 1
-                            
-                            # Check remaining wall time budget for evaluation
-                            remaining_time = None
-                            if config.budget.max_wall_time_seconds is not None:
-                                elapsed = time.monotonic() - start_time
-                                remaining_time = config.budget.max_wall_time_seconds - elapsed - 0.1  # small buffer
-                            
                             eval_record, cutoff_reason = self.evaluate_policy(
                                 agent=controller.agent,
                                 env_config=config.env_config,
                                 n_episodes=eval_episodes,
                                 episode_seeds=ep_seeds,
-                                deadline=time.monotonic() + remaining_time if remaining_time is not None else None,
+                                deadline=time.monotonic() + remaining_time,
                             )
                             eval_record.training_transition = training_transitions
                             evaluation_history.append(eval_record)
                             last_eval_transition = training_transitions
-                            
-                            eval_time = time.monotonic() - eval_start
-                            periodic_eval_times.append(eval_time)
                             
                             if cutoff_reason != "completed":
                                 if verbose:
                                     print(f"  Periodic evaluation cutoff: {cutoff_reason}")
                             elif verbose:
                                 print(f"  Eval mean: {eval_record.mean_score:.2f} ± {eval_record.std_score:.2f} "
-                                      f"(time: {eval_time:.2f}s)")
+                                      f"(time: {eval_record.eval_time:.2f}s, completed: {eval_record.completed_episodes}/{eval_record.requested_episodes})")
+                    else:
+                        # No wall time budget - run evaluation with generous deadline
+                        eval_record, cutoff_reason = self.evaluate_policy(
+                            agent=controller.agent,
+                            env_config=config.env_config,
+                            n_episodes=eval_episodes,
+                            episode_seeds=ep_seeds,
+                            deadline=time.monotonic() + 30.0,  # 30 second max per evaluation
+                        )
+                        eval_record.training_transition = training_transitions
+                        evaluation_history.append(eval_record)
+                        last_eval_transition = training_transitions
+                        
+                        if cutoff_reason != "completed":
+                            if verbose:
+                                print(f"  Periodic evaluation cutoff: {cutoff_reason}")
+                            elif verbose:
+                                print(f"  Eval mean: {eval_record.mean_score:.2f} ± {eval_record.std_score:.2f} "
+                                      f"(time: {eval_record.eval_time:.2f}s, completed: {eval_record.completed_episodes}/{eval_record.requested_episodes})")
 
         except KeyboardInterrupt:
             stopped_reason = "interrupted"
@@ -527,7 +569,7 @@ class ExperimentRunner:
         # Controller session time includes periodic eval time since they run inline
         periodic_eval_time = sum(e.eval_time for e in evaluation_history)
         training_time = max(0.0, controller_time - periodic_eval_time)
-        evaluation_time = total_eval_time
+        evaluation_time = sum(e.eval_time for e in evaluation_history) + (final_evaluation.eval_time if final_evaluation else 0.0)
         overhead_time = wall_time - training_time - evaluation_time
         if overhead_time < 0:
             overhead_time = 0.0  # Small floating point correction
