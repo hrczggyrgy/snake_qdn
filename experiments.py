@@ -64,6 +64,12 @@ class EvaluationRecord:
     episode_scores: list[int]
     mean_score: float
     std_score: float
+    eval_time: float = 0.0
+    
+    @property
+    def completed_episodes(self) -> int:
+        """Number of episodes completed in this evaluation."""
+        return len(self.episode_scores)
 
 
 @dataclass
@@ -75,6 +81,7 @@ class FinalEvaluation:
     std_score: float
     completed_episodes: int
     cutoff_reason: str = "completed"
+    eval_time: float = 0.0
 
 
 @dataclass
@@ -109,16 +116,17 @@ class ExperimentResult:
     final_evaluation: FinalEvaluation | None = None
     # Resource usage
     peak_memory_mb: float | None = None
-    # Timing (with defaults)
+    # Timing (explicit accumulation)
     training_time: float = 0.0
     evaluation_time: float = 0.0
+    overhead_time: float = 0.0
     # Status
     completed: bool = True
     stopped_reason: str = "budget_exhausted"
     
     # Backward compatibility properties
     @property
-    def eval_scores(self) -> list[int]:
+    def eval_scores(self) -> list[float]:
         """Backward compat: list of periodic evaluation means."""
         return [e.mean_score for e in self.evaluation_history]
     
@@ -147,6 +155,22 @@ class ExperimentResult:
         return self.final_evaluation.std_score if self.final_evaluation else 0.0
 
 
+class _DeadlineChecker:
+    """Checks if a deadline has been exceeded."""
+    def __init__(self, deadline: float | None = None):
+        self.deadline = deadline
+    
+    def is_exceeded(self) -> bool:
+        if self.deadline is None:
+            return False
+        return time.monotonic() >= self.deadline
+    
+    def remaining(self) -> float | None:
+        if self.deadline is None:
+            return None
+        return max(0.0, self.deadline - time.monotonic())
+
+
 class ExperimentRunner:
     """Runs controlled experiments with fixed budgets."""
 
@@ -171,6 +195,20 @@ class ExperimentRunner:
         
         return train_seed, eval_seeds
 
+    def _derive_periodic_seeds(self, base_seed: int, max_evaluations: int, episodes_per_eval: int) -> list[list[int]]:
+        """Derive seed panels for all periodic evaluations.
+        
+        Each evaluation gets a fixed panel of episode seeds.
+        """
+        rng = np.random.default_rng(base_seed)
+        all_seeds = [int(rng.integers(0, 2**31 - 1)) for _ in range(max_evaluations * episodes_per_eval)]
+        panels = []
+        for i in range(max_evaluations):
+            start = i * episodes_per_eval
+            end = start + episodes_per_eval
+            panels.append(all_seeds[start:end])
+        return panels
+
     def evaluate_policy(
         self,
         agent: Agent,
@@ -178,7 +216,8 @@ class ExperimentRunner:
         n_episodes: int = 5,
         max_steps_per_episode: int = 200,
         episode_seeds: list[int] | None = None,
-    ) -> EvaluationRecord:
+        deadline: float | None = None,
+    ) -> tuple[EvaluationRecord, str]:
         """
         Evaluate a policy in isolation without affecting training state.
         
@@ -187,17 +226,24 @@ class ExperimentRunner:
             env_config: Environment configuration
             n_episodes: Number of evaluation episodes
             max_steps_per_episode: Step limit per episode
-            episode_seeds: Optional list of seeds for each episode
-            
+            episode_seeds: Optional list of seeds for each episode (must be provided for reproducibility)
+            deadline: Optional wall-clock deadline (monotonic time). If exceeded, evaluation stops.
+        
         Returns:
-            EvaluationRecord with scores and statistics
+            Tuple of (EvaluationRecord, cutoff_reason)
         """
-        # Use provided seeds or generate deterministic ones
         if episode_seeds is None:
-            episode_seeds = [None] * n_episodes
+            raise ValueError("episode_seeds must be provided for reproducible evaluation")
+        if len(episode_seeds) < n_episodes:
+            raise ValueError(f"Need {n_episodes} episode seeds, got {len(episode_seeds)}")
+        if n_episodes <= 0:
+            raise ValueError("n_episodes must be positive")
+        if max_steps_per_episode <= 0:
+            raise ValueError("max_steps_per_episode must be positive")
+        
+        deadline_checker = _DeadlineChecker(deadline)
         
         # Create evaluation environment (no rendering)
-        # EnvConfig doesn't have allow_tail_entry, use default (True)
         eval_env = SnakeGameAI(
             grid_size=env_config.grid_size,
             step_penalty=env_config.step_penalty,
@@ -212,36 +258,62 @@ class ExperimentRunner:
         agent.model.eval()
         
         scores = []
+        used_seeds = []
+        cutoff_reason = "completed"
+        eval_start = time.monotonic()
+        
         try:
             for i in range(n_episodes):
+                if deadline_checker.is_exceeded():
+                    cutoff_reason = "deadline_exceeded"
+                    break
+                
                 # Seed this episode's environment
-                ep_seed = episode_seeds[i] if i < len(episode_seeds) else None
-                if ep_seed is not None:
-                    eval_env.seed(ep_seed)
+                ep_seed = episode_seeds[i]
+                eval_env.seed(ep_seed)
+                used_seeds.append(ep_seed)
                 
                 state, _ = eval_env.reset()
                 done = False
                 steps = 0
                 
                 while not done and steps < max_steps_per_episode:
+                    if deadline_checker.is_exceeded():
+                        cutoff_reason = "deadline_exceeded"
+                        break
+                    
                     action = agent.get_action(state, training=False)
                     state, reward, terminated, truncated, info = eval_env.step(action)
                     done = terminated or truncated
                     steps += 1
                 
+                if cutoff_reason == "deadline_exceeded":
+                    break
+                
                 scores.append(info["score"])
+            
+        except KeyboardInterrupt:
+            cutoff_reason = "interrupted"
+            raise
+        except Exception:
+            cutoff_reason = "error"
+            raise
         finally:
             # Always restore model mode and close environment
             agent.model.train(was_training)
             eval_env.close()
         
+        eval_time = time.monotonic() - eval_start
+        completed_episodes = len(scores)
+        
         return EvaluationRecord(
             training_transition=0,  # Set by caller
-            episode_seeds=episode_seeds[:n_episodes],
+            episode_seeds=used_seeds,
             episode_scores=scores,
             mean_score=float(np.mean(scores)) if scores else 0.0,
             std_score=float(np.std(scores)) if scores else 0.0,
-        )
+            eval_time=eval_time,
+        ), cutoff_reason
 
     def run_experiment(self, config: ExperimentConfig, eval_every: int = 500,
                        eval_episodes: int = 5, verbose: bool = True) -> ExperimentResult:
@@ -259,6 +331,7 @@ class ExperimentRunner:
         """
         experiment_id = f"{config.name}_{uuid.uuid4().hex[:8]}"
         start_time = time.monotonic()
+        overhead_start = time.monotonic()
 
         if verbose:
             print(f"\n{'='*60}")
@@ -276,7 +349,6 @@ class ExperimentRunner:
 
         # Create controller with seeded training environment
         env_config = config.env_config
-        # Set the training environment seed
         env_config = EnvConfig(
             grid_size=env_config.grid_size,
             step_penalty=env_config.step_penalty,
@@ -295,11 +367,17 @@ class ExperimentRunner:
 
         # Track evaluations
         evaluation_history: list[EvaluationRecord] = []
+        periodic_eval_times = []
         metrics = controller.get_metrics()
         last_eval_transition = metrics.get("training_transitions", 0)
         
-        # For periodic evaluation seeds, derive from experiment seed
-        periodic_eval_seeds = self._derive_seeds(config.seed + 1, n_eval_episodes=eval_episodes * 10)[1]
+        # Calculate maximum number of periodic evaluations possible
+        max_transitions = config.budget.max_env_transitions or 1_000_000
+        max_evaluations = max(1, max_transitions // max(eval_every, 1)) + 2
+        periodic_seed_panels = self._derive_periodic_seeds(
+            config.seed + 1, max_evaluations, eval_episodes
+        )
+        panel_idx = 0
 
         # Main training loop
         try:
@@ -329,26 +407,52 @@ class ExperimentRunner:
                     if verbose:
                         print(f"  Running evaluation at training transition {training_transitions}...")
                     
-                    eval_start = time.monotonic()
-                    # Get seeds for this periodic evaluation
-                    ep_seeds = periodic_eval_seeds[:eval_episodes]
-                    periodic_eval_seeds = periodic_eval_seeds[eval_episodes:]
-                    
-                    eval_record = self.evaluate_policy(
-                        agent=controller.agent,
-                        env_config=config.env_config,  # Use same config but eval env will be separate
-                        n_episodes=eval_episodes,
-                        episode_seeds=ep_seeds,
-                    )
-                    eval_record.training_transition = training_transitions
-                    evaluation_history.append(eval_record)
-                    last_eval_transition = training_transitions
-                    
-                    eval_time = time.monotonic() - eval_start
-                    
-                    if verbose:
-                        print(f"  Eval mean: {eval_record.mean_score:.2f} ± {eval_record.std_score:.2f} "
-                              f"(time: {eval_time:.2f}s)")
+                    # Check if we have enough budget for evaluation
+                    # Reserve ~1 transition per episode per eval as a rough estimate
+                    eval_budget_reserve = eval_episodes * 10
+                    if config.budget.max_env_transitions is not None:
+                        if env_transitions + eval_budget_reserve >= config.budget.max_env_transitions:
+                            if verbose:
+                                print(f"  Skipping periodic evaluation: insufficient budget remaining")
+                        else:
+                            eval_start = time.monotonic()
+                            # Get seeds for this periodic evaluation
+                            if panel_idx >= len(periodic_seed_panels):
+                                # Derive more if needed (shouldn't happen with proper max_evaluations)
+                                extra_panels = self._derive_periodic_seeds(
+                                    config.seed + 2 + panel_idx, 10, eval_episodes
+                                )
+                                periodic_seed_panels.extend(extra_panels)
+                            
+                            ep_seeds = periodic_seed_panels[panel_idx]
+                            panel_idx += 1
+                            
+                            # Check remaining wall time budget for evaluation
+                            remaining_time = None
+                            if config.budget.max_wall_time_seconds is not None:
+                                elapsed = time.monotonic() - start_time
+                                remaining_time = config.budget.max_wall_time_seconds - elapsed - 0.1  # small buffer
+                            
+                            eval_record, cutoff_reason = self.evaluate_policy(
+                                agent=controller.agent,
+                                env_config=config.env_config,
+                                n_episodes=eval_episodes,
+                                episode_seeds=ep_seeds,
+                                deadline=time.monotonic() + remaining_time if remaining_time is not None else None,
+                            )
+                            eval_record.training_transition = training_transitions
+                            evaluation_history.append(eval_record)
+                            last_eval_transition = training_transitions
+                            
+                            eval_time = time.monotonic() - eval_start
+                            periodic_eval_times.append(eval_time)
+                            
+                            if cutoff_reason != "completed":
+                                if verbose:
+                                    print(f"  Periodic evaluation cutoff: {cutoff_reason}")
+                            elif verbose:
+                                print(f"  Eval mean: {eval_record.mean_score:.2f} ± {eval_record.std_score:.2f} "
+                                      f"(time: {eval_time:.2f}s)")
 
         except KeyboardInterrupt:
             stopped_reason = "interrupted"
@@ -357,40 +461,76 @@ class ExperimentRunner:
             if verbose:
                 print(f"Experiment error: {e}")
 
+        # Calculate overhead time so far (setup time)
+        overhead_time = time.monotonic() - overhead_start
+        
+        # Final evaluation
+        final_eval_time = 0.0
+        final_evaluation = None
+        if stopped_reason in ("budget_exhausted", "interrupted", "error"):
+            if verbose:
+                print(f"  Running final evaluation...")
+            
+            eval_start = time.monotonic()
+            # Check remaining wall time
+            remaining_time = None
+            if config.budget.max_wall_time_seconds is not None:
+                elapsed = time.monotonic() - start_time
+                remaining_time = config.budget.max_wall_time_seconds - elapsed
+            
+            try:
+                final_eval_record, cutoff_reason = self.evaluate_policy(
+                    agent=controller.agent,
+                    env_config=config.env_config,
+                    n_episodes=eval_episodes * 2,
+                    episode_seeds=final_eval_seeds,
+                    deadline=time.monotonic() + remaining_time if remaining_time is not None else None,
+                )
+                final_evaluation = FinalEvaluation(
+                    episode_seeds=final_eval_record.episode_seeds,
+                    episode_scores=final_eval_record.episode_scores,
+                    mean_score=final_eval_record.mean_score,
+                    std_score=final_eval_record.std_score,
+                    completed_episodes=len(final_eval_record.episode_scores),
+                    cutoff_reason=cutoff_reason,
+                    eval_time=final_eval_record.eval_time,
+                )
+            except Exception:
+                if verbose:
+                    print(f"  Final evaluation failed: cutoff")
+                final_evaluation = FinalEvaluation(
+                    episode_seeds=[],
+                    episode_scores=[],
+                    mean_score=0.0,
+                    std_score=0.0,
+                    completed_episodes=0,
+                    cutoff_reason="error",
+                    eval_time=0.0,
+                )
+            final_eval_time = time.monotonic() - eval_start
+            
+            if verbose:
+                print(f"  Final eval: {final_evaluation.mean_score:.2f} ± {final_evaluation.std_score:.2f} "
+                      f"(time: {final_eval_time:.2f}s, completed: {final_evaluation.completed_episodes}, reason: {final_evaluation.cutoff_reason})")
+
         end_time = time.monotonic()
         wall_time = end_time - start_time
-
-        # Final evaluation
-        if verbose:
-            print(f"  Running final evaluation...")
-        eval_start = time.monotonic()
-        final_eval_record = self.evaluate_policy(
-            agent=controller.agent,
-            env_config=config.env_config,
-            n_episodes=eval_episodes * 2,
-            episode_seeds=final_eval_seeds,
-        )
-        final_eval_time = time.monotonic() - eval_start
-        
-        final_evaluation = FinalEvaluation(
-            episode_seeds=final_eval_record.episode_seeds,
-            episode_scores=final_eval_record.episode_scores,
-            mean_score=final_eval_record.mean_score,
-            std_score=final_eval_record.std_score,
-            completed_episodes=len(final_eval_record.episode_scores),
-            cutoff_reason="completed",
-        )
-        
-        if verbose:
-            print(f"  Final eval: {final_evaluation.mean_score:.2f} ± {final_evaluation.std_score:.2f} "
-                  f"(time: {final_eval_time:.2f}s)")
 
         # Collect results
         agent = controller.agent
         metrics = controller.get_metrics()
-        training_time = metrics.get("total_session_time", 0.0)
-        # Evaluation time = total - training (approximate)
-        evaluation_time = wall_time - training_time
+        
+        # Calculate explicit timing breakdown
+        total_eval_time = sum(e.eval_time for e in evaluation_history) + (final_evaluation.eval_time if final_evaluation else 0.0)
+        controller_time = metrics.get("total_session_time", 0.0)
+        # Training time = controller session time - periodic evaluation time (not final eval)
+        # Controller session time includes periodic eval time since they run inline
+        periodic_eval_time = sum(e.eval_time for e in evaluation_history)
+        training_time = max(0.0, controller_time - periodic_eval_time)
+        evaluation_time = total_eval_time
+        overhead_time = wall_time - training_time - evaluation_time
+        if overhead_time < 0:
+            overhead_time = 0.0  # Small floating point correction
 
         result = ExperimentResult(
             experiment_id=experiment_id,
@@ -401,6 +541,7 @@ class ExperimentRunner:
             wall_time=wall_time,
             training_time=training_time,
             evaluation_time=evaluation_time,
+            overhead_time=overhead_time,
             total_env_transitions=metrics.get("env_transitions", 0),
             total_training_transitions=metrics.get("training_transitions", 0),
             total_optimizer_steps=metrics.get("optimizer_updates", 0),
@@ -425,7 +566,7 @@ class ExperimentRunner:
 
         if verbose:
             print(f"\nExperiment {experiment_id} completed!")
-            print(f"  Wall time: {wall_time:.1f}s (training: {training_time:.1f}s, eval: {evaluation_time:.1f}s)")
+            print(f"  Wall time: {wall_time:.1f}s (training: {training_time:.1f}s, eval: {evaluation_time:.1f}s, overhead: {overhead_time:.1f}s)")
             print(f"  Env transitions: {result.total_env_transitions}")
             print(f"  Training transitions: {result.total_training_transitions}")
             print(f"  Optimizer steps: {result.total_optimizer_steps}")
@@ -434,7 +575,9 @@ class ExperimentRunner:
             print(f"  Mean score (last 50): {result.mean_score_last_50:.2f}")
             if evaluation_history:
                 print(f"  Periodic eval: {result.eval_mean:.2f} ± {result.eval_std:.2f}")
-            print(f"  Final eval: {result.final_eval_mean:.2f} ± {result.final_eval_std:.2f}")
+            if final_evaluation:
+                print(f"  Final eval: {result.final_eval_mean:.2f} ± {result.final_eval_std:.2f} "
+                      f"(completed: {final_evaluation.completed_episodes}, reason: {final_evaluation.cutoff_reason})")
             print(f"  Stopped: {stopped_reason}")
 
         controller.close()
@@ -502,15 +645,18 @@ class ExperimentRunner:
 
     def compare_results(self, results: list[ExperimentResult]) -> None:
         """Print comparison table of experiment results."""
-        print(f"\n{'='*100}")
-        print(f"{'Experiment':<30} {'Transitions':>12} {'Opt Steps':>10} {'Episodes':>9} {'Best':>5} {'Mean50':>7} {'Eval±Std':>12} {'Time(s)':>8}")
-        print(f"{'='*100}")
+        print(f"\n{'='*120}")
+        print(f"{'Experiment':<30} {'Transitions':>12} {'Opt Steps':>10} {'Episodes':>9} {'Best':>5} {'Mean50':>7} {'Final±Std':>12} {'Time(s)':>8}")
+        print(f"{'='*120}")
         for r in results:
-            eval_str = f"{r.eval_mean:.1f}±{r.eval_std:.1f}"
+            if r.final_evaluation:
+                eval_str = f"{r.final_evaluation.mean_score:.1f}±{r.final_evaluation.std_score:.1f}"
+            else:
+                eval_str = f"{r.eval_mean:.1f}±{r.eval_std:.1f}"
             print(f"{r.config_name:<30} {r.total_env_transitions:>12} {r.total_optimizer_steps:>10} "
                   f"{r.total_episodes:>9} {r.best_score:>5} {r.mean_score_last_50:>7.1f} "
                   f"{eval_str:>12} {r.wall_time:>8.1f}")
-        print(f"{'='*100}")
+        print(f"{'='*120}")
 
 
 # Pre-defined experiment configurations
