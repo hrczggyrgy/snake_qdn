@@ -1094,6 +1094,9 @@ class TrainingController:
             # For EVALUATE/MANUAL, still track episode_id for UI
             self._episode_id += 1
 
+        # Increment history revision when episode ends (for cache invalidation)
+        self._history_revision += 1
+
     def _reset_episode(self) -> None:
         """Reset environment for new episode, keep agent state."""
         obs, info = self.env.reset()
