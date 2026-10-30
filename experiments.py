@@ -440,8 +440,8 @@ class ExperimentRunner:
         total_budget = config.budget.max_env_transitions or 1_000_000
         # Final evaluation: eval_episodes * 2 episodes, budget based on realistic ~100 steps/episode
         # (horizon cutoff typically occurs at ~56 steps, so budget for ~100/episode is realistic)
-        # Use smaller reserve for final eval (max 25% of total budget) to leave more for periodic evaluations
-        final_eval_transition_budget = min(total_budget // 4, eval_episodes * 2 * 100, 2000)
+        # Reserve the actual minimum needed for final evaluation
+        final_eval_transition_budget = min(eval_episodes * 2 * 100, 2000)
         
         # Reserve capacity for periodic evaluations (what's left after final eval reserve)
         # Give periodic evaluations more budget - they run more frequently
@@ -469,8 +469,8 @@ class ExperimentRunner:
                 if config.budget.max_env_transitions is not None:
                     remaining_for_final = max(0, config.budget.max_env_transitions - total_transitions)
                     # Stop training if we don't have enough budget left for final evaluation
-                    # Need at least min_final_eval_budget for final evaluation (4 episodes * ~50 steps min)
-                    min_final_eval_budget = eval_episodes * 2 * 50
+                    # Need at least min_final_eval_budget for final evaluation (4 episodes * ~100 steps)
+                    min_final_eval_budget = eval_episodes * 2 * 100
                     # Use the smaller of reserved budget and minimum needed
                     required_final_budget = min(final_eval_transition_budget, min_final_eval_budget)
                     if remaining_for_final <= required_final_budget:
@@ -506,7 +506,7 @@ class ExperimentRunner:
                     panel_idx += 1
                     
                     # Calculate evaluation budget for periodic evaluation
-                    # env_transitions already includes evaluation steps, don't double-count
+                    # env_transitions only includes training; add eval_transitions_used for total
                     # Use realistic ~100 steps/episode instead of max_steps_per_episode (200)
                     eval_budget = min(eval_episodes * 100, periodic_eval_budget)
                     if config.budget.max_env_transitions is not None:
@@ -515,10 +515,8 @@ class ExperimentRunner:
                         remaining_periodic = max(0, periodic_eval_budget - eval_transitions_used)
                         # Limit eval budget to remaining periodic budget
                         eval_budget = min(eval_budget, remaining_periodic)
-                        # Also ensure we don't exceed total budget minus final eval reserve
+                        # Also ensure we don't exceed total budget
                         remaining_for_final = max(0, config.budget.max_env_transitions - total_transitions)
-                        if remaining_for_final > eval_budget:
-                            eval_budget = min(eval_budget, remaining_for_final - final_eval_transition_budget)
                         eval_budget = min(eval_budget, remaining_for_final)
 
                     # Check remaining wall time budget for evaluation
@@ -539,6 +537,7 @@ class ExperimentRunner:
                                 episode_seeds=ep_seeds,
                                 deadline=time.monotonic() + remaining_time,
                                 max_total_steps=eval_budget,
+                                max_steps_per_episode=100,
                             )
                             eval_record.training_transition = training_transitions
                             evaluation_history.append(eval_record)
@@ -552,8 +551,7 @@ class ExperimentRunner:
                                 print(f"  Eval mean: {eval_record.mean_score:.2f} ± {eval_record.std_score:.2f} "
                                       f"(time: {eval_record.eval_time:.2f}s, completed: {eval_record.completed_episodes}/{eval_record.requested_episodes})")
                     else:
-                        # No wall time budget - run evaluation with generous deadline
-                        eval_budget = eval_episodes * 200  # rough estimate
+                        # No wall time budget - use the already-calculated eval_budget
                         eval_record, cutoff_reason = self.evaluate_policy(
                             agent=controller.agent,
                             env_config=config.env_config,
@@ -561,6 +559,7 @@ class ExperimentRunner:
                             episode_seeds=ep_seeds,
                             deadline=time.monotonic() + 30.0,  # 30 second max per evaluation
                             max_total_steps=eval_budget,
+                            max_steps_per_episode=100,
                         )
                         eval_record.training_transition = training_transitions
                         evaluation_history.append(eval_record)
@@ -596,11 +595,12 @@ class ExperimentRunner:
             env_transitions = metrics.get("env_transitions", 0)
             
             # Calculate final evaluation budget based on remaining budget
-            # env_transitions already includes evaluation steps, don't double-count
+            # env_transitions only includes training; add eval_transitions_used for total
             # Use realistic ~100 steps per episode (horizon cutoff typically ~56)
             final_eval_budget = eval_episodes * 2 * 100  # realistic estimate (4 episodes * 100 steps)
             if config.budget.max_env_transitions is not None:
-                remaining_for_final = max(0, config.budget.max_env_transitions - env_transitions)
+                total_transitions = env_transitions + eval_transitions_used
+                remaining_for_final = max(0, config.budget.max_env_transitions - total_transitions)
                 # Cap final eval budget to remaining budget
                 final_eval_budget = min(final_eval_budget, remaining_for_final)
             

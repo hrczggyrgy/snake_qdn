@@ -510,7 +510,8 @@ class TestPeriodicEvaluationSeeds:
         """Periodic evaluations should have explicit seeds even after many evaluations."""
         runner = ExperimentRunner("test_periodic_seeds")
         config = get_baseline_experiment()
-        config.budget = ExperimentBudget(max_env_transitions=500)
+        # Budget must accommodate: training (~100) + 2 periodic evals (2*2*~100=400) + final eval (4*~100=400) = ~900
+        config.budget = ExperimentBudget(max_env_transitions=1000)
         config.agent_config.learning_starts = 50
         config.agent_config.batch_size = 16
         
