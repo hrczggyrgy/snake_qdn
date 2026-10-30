@@ -57,6 +57,27 @@ class ExperimentConfig:
 
 
 @dataclass
+class EvaluationRecord:
+    """Single evaluation record at a training checkpoint."""
+    training_transition: int
+    episode_seeds: list[int]
+    episode_scores: list[int]
+    mean_score: float
+    std_score: float
+
+
+@dataclass
+class FinalEvaluation:
+    """Final evaluation of the trained policy."""
+    episode_seeds: list[int]
+    episode_scores: list[int]
+    mean_score: float
+    std_score: float
+    completed_episodes: int
+    cutoff_reason: str = "completed"
+
+
+@dataclass
 class ExperimentResult:
     """Results from a single experiment run."""
     experiment_id: str
@@ -67,6 +88,7 @@ class ExperimentResult:
     wall_time: float
     # Final metrics
     total_env_transitions: int
+    total_training_transitions: int
     total_optimizer_steps: int
     total_episodes: int
     # Performance
@@ -81,18 +103,48 @@ class ExperimentResult:
     mean_scores_history: list[float]
     epsilon_history: list[float]
     loss_history: list[float]
-    # Evaluation (greedy) scores
-    eval_scores: list[int] = field(default_factory=list)
-    eval_mean: float = 0.0
-    eval_std: float = 0.0
-    # Final evaluation metrics (on final policy only)
-    final_eval_mean: float = 0.0
-    final_eval_std: float = 0.0
+    # Evaluation history (periodic evaluations during training)
+    evaluation_history: list[EvaluationRecord] = field(default_factory=list)
+    # Final evaluation (on final policy)
+    final_evaluation: FinalEvaluation | None = None
     # Resource usage
     peak_memory_mb: float | None = None
+    # Timing (with defaults)
+    training_time: float = 0.0
+    evaluation_time: float = 0.0
     # Status
     completed: bool = True
     stopped_reason: str = "budget_exhausted"
+    
+    # Backward compatibility properties
+    @property
+    def eval_scores(self) -> list[int]:
+        """Backward compat: list of periodic evaluation means."""
+        return [e.mean_score for e in self.evaluation_history]
+    
+    @property
+    def eval_mean(self) -> float:
+        """Backward compat: mean of periodic evaluation means."""
+        if not self.evaluation_history:
+            return 0.0
+        return np.mean([e.mean_score for e in self.evaluation_history])
+    
+    @property
+    def eval_std(self) -> float:
+        """Backward compat: std of periodic evaluation means."""
+        if not self.evaluation_history:
+            return 0.0
+        return np.std([e.mean_score for e in self.evaluation_history])
+    
+    @property
+    def final_eval_mean(self) -> float:
+        """Backward compat: final evaluation mean."""
+        return self.final_evaluation.mean_score if self.final_evaluation else 0.0
+    
+    @property
+    def final_eval_std(self) -> float:
+        """Backward compat: final evaluation std."""
+        return self.final_evaluation.std_score if self.final_evaluation else 0.0
 
 
 class ExperimentRunner:
@@ -102,6 +154,95 @@ class ExperimentRunner:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+    def _derive_seeds(self, base_seed: int, n_training: int = 1, n_eval_episodes: int = 10) -> tuple[int, list[int]]:
+        """Derive training and evaluation seeds from base experiment seed.
+        
+        Uses a deterministic derivation so the same base seed always produces
+        the same training seed and evaluation seed list.
+        """
+        # Create a local RNG from the base seed
+        rng = np.random.default_rng(base_seed)
+        
+        # Training environment seed
+        train_seed = int(rng.integers(0, 2**31 - 1))
+        
+        # Evaluation episode seeds (for reproducible final evaluation)
+        eval_seeds = [int(rng.integers(0, 2**31 - 1)) for _ in range(n_eval_episodes)]
+        
+        return train_seed, eval_seeds
+
+    def evaluate_policy(
+        self,
+        agent: Agent,
+        env_config: EnvConfig,
+        n_episodes: int = 5,
+        max_steps_per_episode: int = 200,
+        episode_seeds: list[int] | None = None,
+    ) -> EvaluationRecord:
+        """
+        Evaluate a policy in isolation without affecting training state.
+        
+        Args:
+            agent: The agent to evaluate (uses greedy policy)
+            env_config: Environment configuration
+            n_episodes: Number of evaluation episodes
+            max_steps_per_episode: Step limit per episode
+            episode_seeds: Optional list of seeds for each episode
+            
+        Returns:
+            EvaluationRecord with scores and statistics
+        """
+        # Use provided seeds or generate deterministic ones
+        if episode_seeds is None:
+            episode_seeds = [None] * n_episodes
+        
+        # Create evaluation environment (no rendering)
+        # EnvConfig doesn't have allow_tail_entry, use default (True)
+        eval_env = SnakeGameAI(
+            grid_size=env_config.grid_size,
+            step_penalty=env_config.step_penalty,
+            food_reward=env_config.food_reward,
+            death_penalty=env_config.death_penalty,
+            render_mode=None,  # No rendering for evaluation
+            seed=None,  # We'll seed each episode explicitly
+        )
+        
+        # Save model mode and set to eval
+        was_training = agent.model.training
+        agent.model.eval()
+        
+        scores = []
+        try:
+            for i in range(n_episodes):
+                # Seed this episode's environment
+                ep_seed = episode_seeds[i] if i < len(episode_seeds) else None
+                if ep_seed is not None:
+                    eval_env.seed(ep_seed)
+                
+                state, _ = eval_env.reset()
+                done = False
+                steps = 0
+                
+                while not done and steps < max_steps_per_episode:
+                    action = agent.get_action(state, training=False)
+                    state, reward, terminated, truncated, info = eval_env.step(action)
+                    done = terminated or truncated
+                    steps += 1
+                
+                scores.append(info["score"])
+        finally:
+            # Always restore model mode and close environment
+            agent.model.train(was_training)
+            eval_env.close()
+        
+        return EvaluationRecord(
+            training_transition=0,  # Set by caller
+            episode_seeds=episode_seeds[:n_episodes],
+            episode_scores=scores,
+            mean_score=float(np.mean(scores)) if scores else 0.0,
+            std_score=float(np.std(scores)) if scores else 0.0,
+        )
+
     def run_experiment(self, config: ExperimentConfig, eval_every: int = 500,
                        eval_episodes: int = 5, verbose: bool = True) -> ExperimentResult:
         """
@@ -109,7 +250,7 @@ class ExperimentRunner:
 
         Args:
             config: Experiment configuration
-            eval_every: Run evaluation every N environment transitions
+            eval_every: Run evaluation every N training transitions
             eval_episodes: Number of evaluation episodes per eval run
             verbose: Print progress
 
@@ -127,21 +268,38 @@ class ExperimentRunner:
             print(f"Seed: {config.seed}")
             print(f"{'='*60}")
 
-        # Apply seed for reproducibility
+        # Derive seeds for training and evaluation
+        train_seed, final_eval_seeds = self._derive_seeds(config.seed, n_eval_episodes=eval_episodes * 2)
+        
+        # Apply seed for reproducibility (global RNGs)
         self._apply_seed(config.seed)
 
-        # Create controller with fixed seed
+        # Create controller with seeded training environment
+        env_config = config.env_config
+        # Set the training environment seed
+        env_config = EnvConfig(
+            grid_size=env_config.grid_size,
+            step_penalty=env_config.step_penalty,
+            food_reward=env_config.food_reward,
+            death_penalty=env_config.death_penalty,
+            render_mode=env_config.render_mode,
+            seed=train_seed,
+        )
+        
         controller = TrainingController(
-            env_config=config.env_config,
+            env_config=env_config,
             agent_config=config.agent_config,
         )
         controller.set_mode(ActivityMode.TRAIN)
         controller.set_paused(False)
 
-        # Track evaluation scores
-        eval_scores = []
+        # Track evaluations
+        evaluation_history: list[EvaluationRecord] = []
         metrics = controller.get_metrics()
         last_eval_transition = metrics.get("training_transitions", 0)
+        
+        # For periodic evaluation seeds, derive from experiment seed
+        periodic_eval_seeds = self._derive_seeds(config.seed + 1, n_eval_episodes=eval_episodes * 10)[1]
 
         # Main training loop
         try:
@@ -170,11 +328,27 @@ class ExperimentRunner:
                 if eval_every > 0 and training_transitions - last_eval_transition >= eval_every:
                     if verbose:
                         print(f"  Running evaluation at training transition {training_transitions}...")
-                    eval_result = self._evaluate(controller, eval_episodes)
-                    eval_scores.append(eval_result)
+                    
+                    eval_start = time.monotonic()
+                    # Get seeds for this periodic evaluation
+                    ep_seeds = periodic_eval_seeds[:eval_episodes]
+                    periodic_eval_seeds = periodic_eval_seeds[eval_episodes:]
+                    
+                    eval_record = self.evaluate_policy(
+                        agent=controller.agent,
+                        env_config=config.env_config,  # Use same config but eval env will be separate
+                        n_episodes=eval_episodes,
+                        episode_seeds=ep_seeds,
+                    )
+                    eval_record.training_transition = training_transitions
+                    evaluation_history.append(eval_record)
                     last_eval_transition = training_transitions
+                    
+                    eval_time = time.monotonic() - eval_start
+                    
                     if verbose:
-                        print(f"  Eval mean: {eval_result['mean_score']:.2f} ± {eval_result['std_score']:.2f}")
+                        print(f"  Eval mean: {eval_record.mean_score:.2f} ± {eval_record.std_score:.2f} "
+                              f"(time: {eval_time:.2f}s)")
 
         except KeyboardInterrupt:
             stopped_reason = "interrupted"
@@ -186,12 +360,38 @@ class ExperimentRunner:
         end_time = time.monotonic()
         wall_time = end_time - start_time
 
-        # Final evaluation (using a separate environment to not affect training state)
-        final_eval = self._evaluate_final(controller, eval_episodes * 2)
-        eval_scores.append(final_eval)
+        # Final evaluation
+        if verbose:
+            print(f"  Running final evaluation...")
+        eval_start = time.monotonic()
+        final_eval_record = self.evaluate_policy(
+            agent=controller.agent,
+            env_config=config.env_config,
+            n_episodes=eval_episodes * 2,
+            episode_seeds=final_eval_seeds,
+        )
+        final_eval_time = time.monotonic() - eval_start
+        
+        final_evaluation = FinalEvaluation(
+            episode_seeds=final_eval_record.episode_seeds,
+            episode_scores=final_eval_record.episode_scores,
+            mean_score=final_eval_record.mean_score,
+            std_score=final_eval_record.std_score,
+            completed_episodes=len(final_eval_record.episode_scores),
+            cutoff_reason="completed",
+        )
+        
+        if verbose:
+            print(f"  Final eval: {final_evaluation.mean_score:.2f} ± {final_evaluation.std_score:.2f} "
+                  f"(time: {final_eval_time:.2f}s)")
 
         # Collect results
         agent = controller.agent
+        metrics = controller.get_metrics()
+        training_time = metrics.get("total_session_time", 0.0)
+        # Evaluation time = total - training (approximate)
+        evaluation_time = wall_time - training_time
+
         result = ExperimentResult(
             experiment_id=experiment_id,
             config_name=config.name,
@@ -199,7 +399,10 @@ class ExperimentRunner:
             start_time=start_time,
             end_time=end_time,
             wall_time=wall_time,
+            training_time=training_time,
+            evaluation_time=evaluation_time,
             total_env_transitions=metrics.get("env_transitions", 0),
+            total_training_transitions=metrics.get("training_transitions", 0),
             total_optimizer_steps=metrics.get("optimizer_updates", 0),
             total_episodes=controller.episode,
             final_epsilon=agent.epsilon,
@@ -211,12 +414,8 @@ class ExperimentRunner:
             mean_scores_history=agent.mean_scores_history.copy(),
             epsilon_history=agent.epsilon_history.copy(),
             loss_history=agent.trainer.loss_history.copy(),
-            eval_scores=[e["mean_score"] for e in eval_scores],
-            eval_mean=np.mean([e["mean_score"] for e in eval_scores]) if eval_scores else 0,
-            eval_std=np.std([e["mean_score"] for e in eval_scores]) if eval_scores else 0,
-            # Final evaluation metrics (separate from history)
-            final_eval_mean=final_eval["mean_score"],
-            final_eval_std=final_eval["std_score"],
+            evaluation_history=evaluation_history,
+            final_evaluation=final_evaluation,
             completed=(stopped_reason == "budget_exhausted"),
             stopped_reason=stopped_reason,
         )
@@ -226,44 +425,20 @@ class ExperimentRunner:
 
         if verbose:
             print(f"\nExperiment {experiment_id} completed!")
-            print(f"  Wall time: {wall_time:.1f}s")
-            print(f"  Transitions: {result.total_env_transitions}")
+            print(f"  Wall time: {wall_time:.1f}s (training: {training_time:.1f}s, eval: {evaluation_time:.1f}s)")
+            print(f"  Env transitions: {result.total_env_transitions}")
+            print(f"  Training transitions: {result.total_training_transitions}")
             print(f"  Optimizer steps: {result.total_optimizer_steps}")
             print(f"  Episodes: {result.total_episodes}")
             print(f"  Best score: {result.best_score}")
             print(f"  Mean score (last 50): {result.mean_score_last_50:.2f}")
-            print(f"  Eval mean: {result.eval_mean:.2f} ± {result.eval_std:.2f}")
+            if evaluation_history:
+                print(f"  Periodic eval: {result.eval_mean:.2f} ± {result.eval_std:.2f}")
+            print(f"  Final eval: {result.final_eval_mean:.2f} ± {result.final_eval_std:.2f}")
             print(f"  Stopped: {stopped_reason}")
 
         controller.close()
         return result
-
-    def _evaluate(self, controller: TrainingController, n_episodes: int, max_steps_per_episode: int = 200) -> dict:
-        """Run evaluation episodes with step limit."""
-        controller.set_mode(ActivityMode.EVALUATE)
-        controller.set_paused(False)
-
-        scores = []
-        for _ in range(n_episodes):
-            controller.restart_board()
-            done = False
-            steps = 0
-            while not done and steps < max_steps_per_episode:
-                snap = controller.step()
-                done = snap.game_over
-                steps += 1
-            scores.append(snap.score)
-
-        controller.set_mode(ActivityMode.TRAIN)
-        controller.set_paused(False)  # Ensure training resumes
-        controller.restart_board()    # Start new training episode
-        return {
-            "mean_score": np.mean(scores),
-            "std_score": np.std(scores),
-            "max_score": np.max(scores),
-            "min_score": np.min(scores),
-            "scores": scores,
-        }
     
     def _apply_seed(self, seed: int) -> None:
         """Apply seed to all random number generators."""
@@ -274,45 +449,6 @@ class ExperimentRunner:
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
-    
-    def _evaluate_final(self, controller: TrainingController, n_episodes: int, max_steps_per_episode: int = 200) -> dict:
-        """Run final evaluation on a separate environment to not affect training state."""
-        # Create a fresh environment with the same config but separate RNG
-        eval_env = SnakeGameAI(
-            grid_size=controller.env_config.grid_size,
-            step_penalty=controller.env_config.step_penalty,
-            food_reward=controller.env_config.food_reward,
-            death_penalty=controller.env_config.death_penalty,
-            render_mode=controller.env_config.render_mode,
-            seed=None,  # Use separate RNG
-        )
-        
-        # Use the trained agent in evaluation mode (greedy)
-        agent = controller.agent
-        agent.model.eval()
-        
-        scores = []
-        for _ in range(n_episodes):
-            state, _ = eval_env.reset()
-            done = False
-            steps = 0
-            while not done and steps < max_steps_per_episode:
-                action = agent.get_action(state, training=False)
-                state, reward, terminated, truncated, info = eval_env.step(action)
-                done = terminated or truncated
-                steps += 1
-            scores.append(info["score"])
-        
-        agent.model.train()
-        eval_env.close()
-        
-        return {
-            "mean_score": np.mean(scores) if scores else 0.0,
-            "std_score": np.std(scores) if scores else 0.0,
-            "max_score": np.max(scores) if scores else 0,
-            "min_score": np.min(scores) if scores else 0,
-            "scores": scores,
-        }
 
     def _save_result(self, result: ExperimentResult, config: ExperimentConfig) -> None:
         """Save experiment result to disk using versioned envelope."""
@@ -344,6 +480,18 @@ class ExperimentRunner:
             else:
                 # Legacy flat format (backward compatibility)
                 result_data = data
+            
+            # Reconstruct nested dataclasses
+            if "evaluation_history" in result_data:
+                result_data["evaluation_history"] = [
+                    EvaluationRecord(**e) if isinstance(e, dict) else e
+                    for e in result_data["evaluation_history"]
+                ]
+            
+            if "final_evaluation" in result_data and result_data["final_evaluation"]:
+                fe = result_data["final_evaluation"]
+                if isinstance(fe, dict):
+                    result_data["final_evaluation"] = FinalEvaluation(**fe)
             
             # Filter out unexpected fields (e.g., "config" from legacy saves)
             result_fields = {f.name for f in ExperimentResult.__dataclass_fields__.values()}
