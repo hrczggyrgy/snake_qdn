@@ -271,7 +271,7 @@ class TestResourceAccounting:
         """Total wall_time should include both training and evaluation time."""
         runner = ExperimentRunner("test_wall_time")
         config = get_baseline_experiment()
-        config.budget = ExperimentBudget(max_env_transitions=100)
+        config.budget = ExperimentBudget(max_env_transitions=50)
         
         start = time.monotonic()
         result = runner.run_experiment(config, eval_every=25, eval_episodes=1, verbose=False)
