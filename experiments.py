@@ -436,12 +436,11 @@ class ExperimentRunner:
             )
             panel_idx = 0
         
-        # Reserve capacity for final evaluation (minimum guaranteed)
+        # Reserve capacity for final evaluation (minimum guaranteed, capped by total budget)
         total_budget = config.budget.max_env_transitions or 1_000_000
-        # Final evaluation: eval_episodes * 2 episodes, budget based on realistic ~100 steps/episode
-        # (horizon cutoff typically occurs at ~56 steps, so budget for ~100/episode is realistic)
-        # Reserve the actual minimum needed for final evaluation
-        final_eval_transition_budget = min(eval_episodes * 2 * 100, 2000)
+        # Final evaluation: eval_episodes * 2 episodes, fixed horizon of 100 steps/episode
+        # Cap reserve by total budget to allow some training on small budgets
+        final_eval_transition_budget = min(eval_episodes * 2 * 100, 2000, total_budget)
         
         # Reserve capacity for periodic evaluations (what's left after final eval reserve)
         # Give periodic evaluations more budget - they run more frequently
@@ -507,7 +506,7 @@ class ExperimentRunner:
                     
                     # Calculate evaluation budget for periodic evaluation
                     # env_transitions only includes training; add eval_transitions_used for total
-                    # Use realistic ~100 steps/episode instead of max_steps_per_episode (200)
+                    # Use fixed horizon of 100 steps/episode
                     eval_budget = min(eval_episodes * 100, periodic_eval_budget)
                     if config.budget.max_env_transitions is not None:
                         # env_transitions only includes training; add eval_transitions_used for total
@@ -515,9 +514,11 @@ class ExperimentRunner:
                         remaining_periodic = max(0, periodic_eval_budget - eval_transitions_used)
                         # Limit eval budget to remaining periodic budget
                         eval_budget = min(eval_budget, remaining_periodic)
-                        # Also ensure we don't exceed total budget
+                        # Also ensure we don't exceed total budget, protecting final eval reserve
                         remaining_for_final = max(0, config.budget.max_env_transitions - total_transitions)
-                        eval_budget = min(eval_budget, remaining_for_final)
+                        # Protect final eval reserve: periodic eval can only use (remaining - final_reserve)
+                        protected_remaining = max(0, remaining_for_final - final_eval_transition_budget)
+                        eval_budget = min(eval_budget, protected_remaining)
 
                     # Check remaining wall time budget for evaluation
                     remaining_time = None
@@ -612,6 +613,7 @@ class ExperimentRunner:
                     episode_seeds=final_eval_seeds,
                     deadline=time.monotonic() + remaining_time if remaining_time is not None else None,
                     max_total_steps=final_eval_budget,
+                    max_steps_per_episode=100,
                 )
                 final_evaluation = FinalEvaluation(
                     episode_seeds=final_eval_record.episode_seeds,
