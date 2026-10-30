@@ -67,6 +67,7 @@ class EvaluationRecord:
     eval_time: float = 0.0
     cutoff_reason: str = "completed"
     requested_episodes: int = 0
+    total_steps: int = 0
     
     @property
     def completed_episodes(self) -> int:
@@ -84,6 +85,7 @@ class FinalEvaluation:
     completed_episodes: int
     cutoff_reason: str = "completed"
     eval_time: float = 0.0
+    total_steps: int = 0
 
 
 @dataclass
@@ -264,6 +266,7 @@ class ExperimentRunner:
         horizon_cutoff_count = 0
         cutoff_reason = "completed"
         eval_start = time.monotonic()
+        total_steps = 0
         
         try:
             for i in range(n_episodes):
@@ -288,6 +291,7 @@ class ExperimentRunner:
                     state, reward, terminated, truncated, info = eval_env.step(action)
                     done = terminated or truncated
                     steps += 1
+                    total_steps += 1
                 
                 if cutoff_reason == "deadline_exceeded":
                     break
@@ -298,8 +302,10 @@ class ExperimentRunner:
                     scores.append(info["score"])
                     used_seeds.append(episode_seeds[i])
                 else:
-                    # Horizon cutoff - record but don't count as completed
-                    pass  # Don't record seed or score for horizon cutoff
+                    # Horizon cutoff - record the outcome but mark as cutoff
+                    scores.append(info["score"])
+                    used_seeds.append(episode_seeds[i])
+                    horizon_cutoff_count += 1
             
         except KeyboardInterrupt:
             cutoff_reason = "interrupted"
@@ -318,6 +324,8 @@ class ExperimentRunner:
         # Determine final cutoff reason
         if cutoff_reason == "completed" and n_episodes > len(scores):
             cutoff_reason = "horizon_cutoff"
+        elif cutoff_reason == "completed" and horizon_cutoff_count > 0:
+            cutoff_reason = "horizon_cutoff"
         
         return EvaluationRecord(
             training_transition=0,  # Set by caller
@@ -328,6 +336,7 @@ class ExperimentRunner:
             eval_time=eval_time,
             cutoff_reason=cutoff_reason,
             requested_episodes=n_episodes,
+            total_steps=total_steps,
         ), cutoff_reason
 
     def run_experiment(self, config: ExperimentConfig, eval_every: int = 500,
@@ -401,6 +410,9 @@ class ExperimentRunner:
         total_budget = config.budget.max_env_transitions or 1_000_000
         final_eval_transition_budget = min(total_budget // 4, eval_episodes * 2 * 200, 2000)
         
+        # Track transitions used for evaluation
+        eval_transitions_used = 0
+        
         # Main training loop
         try:
             controller.restart_board()  # Start first episode
@@ -415,12 +427,17 @@ class ExperimentRunner:
                 episodes = controller.episode
 
                 # Check if we need to reserve budget for final evaluation
+                # Stop training early if we don't have enough budget left for final evaluation
+                # Include evaluation transitions in the budget check
+                total_transitions = env_transitions + eval_transitions_used
                 if config.budget.max_env_transitions is not None:
-                    remaining_for_final = max(0, config.budget.max_env_transitions - env_transitions)
-                else:
-                    remaining_for_final = 0
+                    remaining_for_final = max(0, config.budget.max_env_transitions - total_transitions)
+                    # Stop training if we don't have enough budget left for final evaluation
+                    if remaining_for_final <= final_eval_transition_budget:
+                        stopped_reason = "budget_exhausted"
+                        break
                 
-                if config.budget.is_exhausted(env_transitions, wall_time, optimizer_steps, episodes):
+                if config.budget.is_exhausted(total_transitions, wall_time, optimizer_steps, episodes):
                     stopped_reason = "budget_exhausted"
                     break
 
@@ -469,6 +486,7 @@ class ExperimentRunner:
                             eval_record.training_transition = training_transitions
                             evaluation_history.append(eval_record)
                             last_eval_transition = training_transitions
+                            eval_transitions_used += eval_record.total_steps
                             
                             if cutoff_reason != "completed":
                                 if verbose:
@@ -488,13 +506,7 @@ class ExperimentRunner:
                         eval_record.training_transition = training_transitions
                         evaluation_history.append(eval_record)
                         last_eval_transition = training_transitions
-                        
-                        if cutoff_reason != "completed":
-                            if verbose:
-                                print(f"  Periodic evaluation cutoff: {cutoff_reason}")
-                            elif verbose:
-                                print(f"  Eval mean: {eval_record.mean_score:.2f} ± {eval_record.std_score:.2f} "
-                                      f"(time: {eval_record.eval_time:.2f}s, completed: {eval_record.completed_episodes}/{eval_record.requested_episodes})")
+                        eval_transitions_used += eval_record.total_steps
 
         except KeyboardInterrupt:
             stopped_reason = "interrupted"
@@ -536,7 +548,9 @@ class ExperimentRunner:
                     completed_episodes=len(final_eval_record.episode_scores),
                     cutoff_reason=cutoff_reason,
                     eval_time=final_eval_record.eval_time,
+                    total_steps=final_eval_record.total_steps,
                 )
+                eval_transitions_used += final_eval_record.total_steps
             except Exception:
                 if verbose:
                     print(f"  Final evaluation failed: cutoff")
