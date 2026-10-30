@@ -449,6 +449,17 @@ class ExperimentRunner:
         # Track transitions used for evaluation
         eval_transitions_used = 0
         
+        # Calculate wall-clock deadlines (if wall time budget is set)
+        start_time = time.monotonic()
+        total_deadline = None
+        training_deadline = None
+        final_eval_time_reserve = 0.0
+        if config.budget.max_wall_time_seconds is not None:
+            total_deadline = start_time + config.budget.max_wall_time_seconds
+            # Reserve time for final evaluation: min(30s, 10% of total budget)
+            final_eval_time_reserve = min(30.0, config.budget.max_wall_time_seconds * 0.1)
+            training_deadline = total_deadline - final_eval_time_reserve
+        
         # Main training loop
         try:
             controller.restart_board()  # Start first episode
@@ -478,6 +489,16 @@ class ExperimentRunner:
                     if training_done >= min_training_budget and remaining_for_final <= required_final_budget:
                         stopped_reason = "budget_exhausted"
                         break
+                
+                # Check wall-clock budget using training deadline (reserves time for final evaluation)
+                if config.budget.max_wall_time_seconds is not None:
+                    current_time = time.monotonic()
+                    if current_time >= training_deadline:
+                        stopped_reason = "budget_exhausted"
+                        break
+                    wall_time = current_time - start_time
+                else:
+                    wall_time = time.monotonic() - start_time
                 
                 if config.budget.is_exhausted(total_transitions, wall_time, optimizer_steps, episodes):
                     stopped_reason = "budget_exhausted"
@@ -540,11 +561,8 @@ class ExperimentRunner:
                         remaining_time = None
                         if config.budget.max_wall_time_seconds is not None:
                             elapsed = time.monotonic() - start_time
-                            # Reserve time for final evaluation (10% of total wall time or 30s, whichever is smaller)
-                            final_eval_time_reserve = 30.0
-                            if config.budget.max_wall_time_seconds <= 600:
-                                final_eval_time_reserve = config.budget.max_wall_time_seconds * 0.1
-                            remaining_time = config.budget.max_wall_time_seconds - elapsed - final_eval_time_reserve
+                            # Use pre-calculated final evaluation time reserve
+                            remaining_time = total_deadline - elapsed - final_eval_time_reserve
                             # Skip if less than 1 second remaining
                             if remaining_time < 1.0:
                                 if verbose:
@@ -622,47 +640,63 @@ class ExperimentRunner:
             
             # Calculate final evaluation budget based on remaining budget
             # env_transitions only includes training; add eval_transitions_used for total
-            # Use realistic ~100 steps per episode (horizon cutoff typically ~56)
-            final_eval_budget = eval_episodes * 2 * 100  # realistic estimate (4 episodes * 100 steps)
+            # Use fixed horizon of 100 steps/episode
+            final_eval_budget = eval_episodes * 2 * 100  # 4 episodes * 100 steps
             if config.budget.max_env_transitions is not None:
                 total_transitions = env_transitions + eval_transitions_used
                 remaining_for_final = max(0, config.budget.max_env_transitions - total_transitions)
                 # Cap final eval budget to remaining budget
                 final_eval_budget = min(final_eval_budget, remaining_for_final)
             
-            try:
-                final_eval_record, cutoff_reason = self.evaluate_policy(
-                    agent=controller.agent,
-                    env_config=config.env_config,
-                    n_episodes=eval_episodes * 2,
-                    episode_seeds=final_eval_seeds,
-                    deadline=time.monotonic() + remaining_time if remaining_time is not None else None,
-                    max_total_steps=final_eval_budget,
-                    max_steps_per_episode=100,
-                )
-                final_evaluation = FinalEvaluation(
-                    episode_seeds=final_eval_record.episode_seeds,
-                    episode_scores=final_eval_record.episode_scores,
-                    mean_score=final_eval_record.mean_score,
-                    std_score=final_eval_record.std_score,
-                    completed_episodes=len(final_eval_record.episode_scores),
-                    cutoff_reason=cutoff_reason,
-                    eval_time=final_eval_record.eval_time,
-                    total_steps=final_eval_record.total_steps,
-                )
-                eval_transitions_used += final_eval_record.total_steps
-            except Exception:
+            # Handle zero/negative final budget explicitly (budget exhaustion, not error)
+            if final_eval_budget <= 0:
                 if verbose:
-                    print(f"  Final evaluation failed: cutoff")
+                    print(f"  Skipping final evaluation: no transition budget remaining")
                 final_evaluation = FinalEvaluation(
                     episode_seeds=[],
                     episode_scores=[],
                     mean_score=0.0,
                     std_score=0.0,
                     completed_episodes=0,
-                    cutoff_reason="error",
+                    cutoff_reason="step_budget_exceeded",
                     eval_time=0.0,
+                    total_steps=0,
                 )
+            else:
+                try:
+                    final_eval_record, cutoff_reason = self.evaluate_policy(
+                        agent=controller.agent,
+                        env_config=config.env_config,
+                        n_episodes=eval_episodes * 2,
+                        episode_seeds=final_eval_seeds,
+                        deadline=time.monotonic() + remaining_time if remaining_time is not None else None,
+                        max_total_steps=final_eval_budget,
+                        max_steps_per_episode=100,
+                    )
+                    final_evaluation = FinalEvaluation(
+                        episode_seeds=final_eval_record.episode_seeds,
+                        episode_scores=final_eval_record.episode_scores,
+                        mean_score=final_eval_record.mean_score,
+                        std_score=final_eval_record.std_score,
+                        completed_episodes=len(final_eval_record.episode_scores),
+                        cutoff_reason=cutoff_reason,
+                        eval_time=final_eval_record.eval_time,
+                        total_steps=final_eval_record.total_steps,
+                    )
+                    eval_transitions_used += final_eval_record.total_steps
+                except Exception:
+                    if verbose:
+                        print(f"  Final evaluation failed: cutoff")
+                    final_evaluation = FinalEvaluation(
+                        episode_seeds=[],
+                        episode_scores=[],
+                        mean_score=0.0,
+                        std_score=0.0,
+                        completed_episodes=0,
+                        cutoff_reason="error",
+                        eval_time=0.0,
+                        total_steps=0,
+                    )
             final_eval_time = time.monotonic() - eval_start
             
             if verbose:
