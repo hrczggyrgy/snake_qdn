@@ -185,7 +185,7 @@ def load_checkpoint(
         target_model: Target network (will be loaded in-place)
         optimizer: Optimizer (will be loaded in-place)
         device: Target device for loading
-        strict: If True, raise on architecture mismatch
+        strict: If True, raise on architecture mismatch; if False, allow partial loading
 
     Returns:
         Tuple of (training_state, model_config)
@@ -464,11 +464,15 @@ class CheckpointManager:
 
         Args:
             filepath: Path to checkpoint file
-            strict: If True, raise on architecture/schema mismatch
+            strict: If True, raise on architecture/schema mismatch; if False, allow mismatches with warnings
             env: Optional environment instance to restore state into
 
         Returns:
             Checkpoint metadata dict including schema versions and controller state
+
+        Raises:
+            ValueError: If strict=True and architecture/schema mismatch
+            FileNotFoundError: If checkpoint file doesn't exist
         """
         training_state, saved_config = load_checkpoint(
             filepath=filepath,
@@ -481,15 +485,28 @@ class CheckpointManager:
 
         # Validate schema versions
         if training_state.observation_schema_version != OBSERVATION_SCHEMA_VERSION:
-            raise ValueError(
+            msg = (
                 f"Observation schema mismatch: checkpoint has v{training_state.observation_schema_version}, "
                 f"current is v{OBSERVATION_SCHEMA_VERSION}. Cannot resume."
             )
+            if strict:
+                raise ValueError(msg)
+            else:
+                print(f"Warning: {msg}")
+
         if training_state.reward_schema_version != REWARD_SCHEMA_VERSION:
-            raise ValueError(
+            msg = (
                 f"Reward schema mismatch: checkpoint has v{training_state.reward_schema_version}, "
                 f"current is v{REWARD_SCHEMA_VERSION}. Cannot resume."
             )
+            if strict:
+                raise ValueError(msg)
+            else:
+                print(f"Warning: {msg}")
+
+        # Validate hyperparameters match exactly for exact resume
+        if strict:
+            self._validate_hyperparameters(training_state)
 
         # Restore agent state
         self.agent.n_games = training_state.episode
@@ -520,28 +537,19 @@ class CheckpointManager:
                 maxlen=50
             )
 
-        # Validate hyperparameters match (warn if not exact)
-        if abs(self.agent.gamma - training_state.gamma) > 1e-6:
-            print(f"Warning: gamma mismatch: checkpoint={training_state.gamma}, current={self.agent.gamma}")
-        if abs(self.agent.tau - training_state.tau) > 1e-6:
-            print(f"Warning: tau mismatch: checkpoint={training_state.tau}, current={self.agent.tau}")
-        if abs(self.agent.epsilon_start - training_state.epsilon_start) > 1e-6:
-            print(f"Warning: epsilon_start mismatch: checkpoint={training_state.epsilon_start}, current={self.agent.epsilon_start}")
-        if abs(self.agent.epsilon_end - training_state.epsilon_end) > 1e-6:
-            print(f"Warning: epsilon_end mismatch: checkpoint={training_state.epsilon_end}, current={self.agent.epsilon_end}")
-        if abs(self.agent.epsilon_decay - training_state.epsilon_decay) > 1e-6:
-            print(f"Warning: epsilon_decay mismatch: checkpoint={training_state.epsilon_decay}, current={self.agent.epsilon_decay}")
-        if self.agent.epsilon_decay_steps != training_state.epsilon_decay_steps:
-            print(f"Warning: epsilon_decay_steps mismatch: checkpoint={training_state.epsilon_decay_steps}, current={self.agent.epsilon_decay_steps}")
-        if self.agent.learning_starts != training_state.learning_starts:
-            print(f"Warning: learning_starts mismatch: checkpoint={training_state.learning_starts}, current={self.agent.learning_starts}")
-        if self.agent.train_every != training_state.train_every:
-            print(f"Warning: train_every mismatch: checkpoint={training_state.train_every}, current={self.agent.train_every}")
-        if self.agent.gradient_steps != training_state.gradient_steps:
-            print(f"Warning: gradient_steps mismatch: checkpoint={training_state.gradient_steps}, current={self.agent.gradient_steps}")
+        # Restore hyperparameters from checkpoint (exact resume)
+        self.agent.gamma = training_state.gamma
+        self.agent.tau = training_state.tau
+        self.agent.epsilon_start = training_state.epsilon_start
+        self.agent.epsilon_end = training_state.epsilon_end
+        self.agent.epsilon_decay = training_state.epsilon_decay
+        self.agent.epsilon_decay_steps = training_state.epsilon_decay_steps
+        self.agent.learning_starts = training_state.learning_starts
+        self.agent.train_every = training_state.train_every
+        self.agent.gradient_steps = training_state.gradient_steps
+        self.agent._transitions_since_train = getattr(training_state, 'transitions_since_train', 0)
 
         # Restore replay buffer
-        # Handle both old tuple format, new dict format, and deque format
         memory_data = training_state.memory
         if hasattr(self.agent.memory, 'states'):
             # New compact ReplayMemory
@@ -550,6 +558,14 @@ class CheckpointManager:
                 size = memory_data.get('size', 0)
                 position = memory_data.get('position', 0)
                 capacity = memory_data.get('capacity', self.agent.memory.capacity)
+                
+                # Validate capacity matches
+                if capacity != self.agent.memory.capacity:
+                    raise ValueError(
+                        f"Replay buffer capacity mismatch: checkpoint has {capacity}, "
+                        f"current agent has {self.agent.memory.capacity}. "
+                        "Cannot resume with different replay buffer capacity."
+                    )
                 
                 self.agent.memory.size = min(size, self.agent.memory.capacity)
                 self.agent.memory.position = position % self.agent.memory.capacity
@@ -601,20 +617,44 @@ class CheckpointManager:
             if env_state.rng_state_python is not None:
                 restore_env_rng_state(env, env_state.rng_state_python, env_state.rng_state_numpy)
             
-            # Rebuild empty cells cache from restored snake
-            env._rebuild_empty_cells()
+            # Restore empty cells cache from saved state (not rebuild)
+            if hasattr(env_state, '_empty_cells') and env_state._empty_cells is not None:
+                env._empty_cells = env_state._empty_cells
+            else:
+                # Fallback: rebuild if not saved
+                env._rebuild_empty_cells()
             
-            # Validate environment settings match (warn if not)
+            # Validate environment settings match (raise if strict, warn otherwise)
             if env.grid_size != training_state.env_grid_size:
-                print(f"Warning: env grid_size mismatch: checkpoint={training_state.env_grid_size}, current={env.grid_size}")
+                msg = f"env grid_size mismatch: checkpoint={training_state.env_grid_size}, current={env.grid_size}"
+                if strict:
+                    raise ValueError(msg)
+                else:
+                    print(f"Warning: {msg}")
             if abs(env.step_penalty - training_state.env_step_penalty) > 1e-6:
-                print(f"Warning: env step_penalty mismatch: checkpoint={training_state.env_step_penalty}, current={env.step_penalty}")
+                msg = f"env step_penalty mismatch: checkpoint={training_state.env_step_penalty}, current={env.step_penalty}"
+                if strict:
+                    raise ValueError(msg)
+                else:
+                    print(f"Warning: {msg}")
             if abs(env.food_reward - training_state.env_food_reward) > 1e-6:
-                print(f"Warning: env food_reward mismatch: checkpoint={training_state.env_food_reward}, current={env.food_reward}")
+                msg = f"env food_reward mismatch: checkpoint={training_state.env_food_reward}, current={env.food_reward}"
+                if strict:
+                    raise ValueError(msg)
+                else:
+                    print(f"Warning: {msg}")
             if abs(env.death_penalty - training_state.env_death_penalty) > 1e-6:
-                print(f"Warning: env death_penalty mismatch: checkpoint={training_state.env_death_penalty}, current={env.death_penalty}")
+                msg = f"env death_penalty mismatch: checkpoint={training_state.env_death_penalty}, current={env.death_penalty}"
+                if strict:
+                    raise ValueError(msg)
+                else:
+                    print(f"Warning: {msg}")
             if env.allow_tail_entry != training_state.env_allow_tail_entry:
-                print(f"Warning: env allow_tail_entry mismatch: checkpoint={training_state.env_allow_tail_entry}, current={env.allow_tail_entry}")
+                msg = f"env allow_tail_entry mismatch: checkpoint={training_state.env_allow_tail_entry}, current={env.allow_tail_entry}"
+                if strict:
+                    raise ValueError(msg)
+                else:
+                    print(f"Warning: {msg}")
 
         return {
             "episode": training_state.episode,
@@ -630,6 +670,67 @@ class CheckpointManager:
             "observation_schema_version": training_state.observation_schema_version,
             "reward_schema_version": training_state.reward_schema_version,
         }
+
+    def _validate_hyperparameters(self, training_state: TrainingState) -> None:
+        """Validate that agent hyperparameters match checkpoint exactly for strict resume."""
+        checks = [
+            ("gamma", self.agent.gamma, training_state.gamma),
+            ("tau", self.agent.tau, training_state.tau),
+            ("epsilon_start", self.agent.epsilon_start, training_state.epsilon_start),
+            ("epsilon_end", self.agent.epsilon_end, training_state.epsilon_end),
+            ("epsilon_decay", self.agent.epsilon_decay, training_state.epsilon_decay),
+            ("epsilon_decay_steps", self.agent.epsilon_decay_steps, training_state.epsilon_decay_steps),
+            ("learning_starts", self.agent.learning_starts, training_state.learning_starts),
+            ("train_every", self.agent.train_every, training_state.train_every),
+            ("gradient_steps", self.agent.gradient_steps, training_state.gradient_steps),
+        ]
+        for name, current, saved in checks:
+            if abs(current - saved) > 1e-6:
+                raise ValueError(
+                    f"Hyperparameter mismatch for {name}: "
+                    f"checkpoint has {saved}, current agent has {current}. "
+                    "Use import_weights_only() for transfer learning."
+                )
+        
+        # Check integer hyperparameters exactly
+        if self.agent.epsilon_decay_steps != training_state.epsilon_decay_steps:
+            raise ValueError(
+                f"epsilon_decay_steps mismatch: checkpoint={training_state.epsilon_decay_steps}, "
+                f"current={self.agent.epsilon_decay_steps}"
+            )
+        if self.agent.learning_starts != training_state.learning_starts:
+            raise ValueError(
+                f"learning_starts mismatch: checkpoint={training_state.learning_starts}, "
+                f"current={self.agent.learning_starts}"
+            )
+        if self.agent.train_every != training_state.train_every:
+            raise ValueError(
+                f"train_every mismatch: checkpoint={training_state.train_every}, "
+                f"current={self.agent.train_every}"
+            )
+        if self.agent.gradient_steps != training_state.gradient_steps:
+            raise ValueError(
+                f"gradient_steps mismatch: checkpoint={training_state.gradient_steps}, "
+                f"current={self.agent.gradient_steps}"
+            )
+
+    def import_weights_only(self, filepath: str) -> ModelConfig:
+        """Load only model weights for transfer learning or inference.
+        
+        Does NOT restore optimizer state, replay buffer, epsilon, or training state.
+        Use this for transfer learning or inference when you don't need exact resume.
+        
+        Args:
+            filepath: Path to checkpoint file
+            
+        Returns:
+            ModelConfig of the loaded checkpoint
+            
+        Raises:
+            ValueError: If architecture mismatch
+            FileNotFoundError: If checkpoint file doesn't exist
+        """
+        return load_model_only(filepath, self.agent.model, self.device)
 
     def save_weights_only(self, filepath: str) -> None:
         """Save only model weights (for inference)."""
