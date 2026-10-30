@@ -78,6 +78,29 @@ class ActivityMode(Enum):
 
 
 @dataclass(frozen=True)
+class DecisionRecord:
+    """Record of a single decision for educational/debugging purposes.
+    
+    Captures the complete context of a decision including the model state,
+    observation, Q-values, action taken, and reasoning.
+    """
+    step_id: int
+    episode_id: int
+    model_revision: int  # Increments when model weights change significantly
+    observation: np.ndarray
+    q_values: np.ndarray
+    action_probs: np.ndarray
+    action: int
+    selection_reason: str
+    epsilon: float
+    timestamp: float
+    # Computed fields
+    q_gap: float = 0.0  # Difference between top two Q-values
+    max_q: float = 0.0  # Maximum Q-value
+    entropy: float = 0.0  # Action probability entropy
+
+
+@dataclass(frozen=True)
 class TrainingSnapshot:
     """
     Immutable snapshot of training state for UI consumption.
@@ -116,6 +139,10 @@ class TrainingSnapshot:
 
     # Performance metrics (copied for snapshot isolation)
     metrics: dict[str, Any] = field(default_factory=dict)
+
+    # Decision context (for Inspect Learning)
+    last_decision: DecisionRecord | None = None
+    model_revision: int = 0  # Increments when model weights change significantly
 
     # Events (recent, for UI)
     recent_events: list[TrainingEvent] = field(default_factory=list)
@@ -1149,6 +1176,38 @@ class TrainingController:
         # Get Bellman update details from agent
         bellman_details = self._agent.get_last_bellman_details() if self._agent else None
 
+        # Build decision record for Inspect Learning
+        last_decision = None
+        model_revision = 0
+        if self._agent and q_vals is not None and probs is not None and action is not None:
+            q_gap = 0.0
+            max_q = 0.0
+            entropy = 0.0
+            if len(q_vals) >= 2:
+                sorted_q = np.sort(q_vals)
+                q_gap = float(sorted_q[-1] - sorted_q[-2])
+                max_q = float(sorted_q[-1])
+                # Compute entropy of action probabilities
+                probs = probs[probs > 0]
+                if len(probs) > 0:
+                    entropy = float(-np.sum(probs * np.log(probs)))
+            last_decision = DecisionRecord(
+                step_id=self._step_id,
+                episode_id=self._episode_id,
+                model_revision=0,  # TODO: track model revision when weights change significantly
+                observation=obs.copy() if obs is not None else np.zeros(11, dtype=np.float32),
+                q_values=q_vals.copy(),
+                action_probs=probs.copy(),
+                action=action,
+                selection_reason=reason or "unknown",
+                epsilon=self.epsilon,
+                timestamp=time.time(),
+                q_gap=q_gap,
+                max_q=max_q,
+                entropy=entropy,
+            )
+            model_revision = 0  # TODO: increment when model weights change significantly
+
         return TrainingSnapshot(
             observation=obs if obs is not None else np.zeros(11, dtype=np.float32),
             game_state=self._game_state or {},
@@ -1174,6 +1233,8 @@ class TrainingController:
             metrics=self.get_metrics(),
             recent_events=recent_events,
             bellman_details=bellman_details,
+            last_decision=last_decision,
+            model_revision=model_revision,
         )
 
     def get_snapshot(self) -> TrainingSnapshot:

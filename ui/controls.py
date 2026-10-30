@@ -87,10 +87,10 @@ def render_primary_toolbar(controller: TrainingController) -> None:
                         speed_options,
                         index=speed_index,
                         key="toolbar_speed",
-                        help="Slow: 0.1s/step\nNormal: 0.05s/step\nFast: 0.05s/step (minimum)",
+                        help="Slow: 0.1s/step\nNormal: 0.05s/step\nFast: 0.01s/step (burst-like)",
                     )
                     st.session_state.speed_preset = new_speed
-                    st.session_state.speed = {"Slow": 0.1, "Normal": 0.05, "Fast": 0.05}[new_speed]
+                    st.session_state.speed = {"Slow": 0.1, "Normal": 0.05, "Fast": 0.01}[new_speed]
                 else:
                     st.session_state.speed = 0.0
                     st.selectbox("Speed", ["N/A (burst)"], disabled=True, key="toolbar_speed_burst")
