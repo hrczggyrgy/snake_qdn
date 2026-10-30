@@ -7,6 +7,8 @@ Full-width section below the main game/progress row.
 # Training Diagnostics
 # =============================================================================
 
+import streamlit as st
+
 
 def render_training_diagnostics(controller: "TrainingController", snapshot: "TrainingSnapshot") -> None:
     """Render the lower Training Diagnostics area (collapsible)."""
