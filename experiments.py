@@ -472,7 +472,7 @@ class ExperimentRunner:
                     break
 
                 # Run one step
-                snap = controller.step()
+                snap = controller.step(execution_policy="FastTraining")
 
                 # Auto-restart board on episode end (TRAIN mode)
                 if snap.game_over and controller.mode == ActivityMode.TRAIN:

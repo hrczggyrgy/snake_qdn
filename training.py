@@ -112,6 +112,7 @@ class TrainingSnapshot:
     run_id: int
     episode_id: int
     step_id: int
+    history_revision: int = 0
 
     # Performance metrics (copied for snapshot isolation)
     metrics: dict[str, Any] = field(default_factory=dict)
@@ -263,6 +264,9 @@ class TrainingController:
         self._run_id: int = 0
         self._episode_id: int = 0
         self._step_id: int = 0
+
+        # History revision counter for cache invalidation (increments when episode history changes)
+        self._history_revision: int = 0
 
         # History windows for UI (bounded)
         self._max_history = 500
@@ -682,19 +686,19 @@ class TrainingController:
     # Public API - Step Operations
     # -------------------------------------------------------------------------
 
-    def step(self, action: int | None = None) -> TrainingSnapshot:
+    def step(self, action: int | None = None, execution_policy: str = "Watch") -> TrainingSnapshot:
         """
         Execute one environment step.
 
         Args:
             action: Optional action for MANUAL mode. Ignored in TRAIN/EVALUATE.
+            execution_policy: "Watch" or "FastTraining" - controls diagnostic level.
 
         Returns:
             TrainingSnapshot with pre-action decision data and post-step state.
         """
         with self._lock:
-            # Single step uses Watch-mode diagnostics (compute Q-values)
-            self._execution_policy = "Watch"
+            self._execution_policy = execution_policy
             return self._step_impl(action)
 
     def _step_impl(self, action: int | None = None) -> TrainingSnapshot:
@@ -789,10 +793,26 @@ class TrainingController:
                     self._agent.epsilon_decay_steps
                 )
             
+            # Check replay readiness before optimization
+            replay_ready = self._agent.memory.is_ready(self._agent.batch_size)
+            self._metrics["replay_buffer_size"] = len(self._agent.memory)
+            self._metrics["replay_active"] = replay_ready
+            
+            # Emit REPLAY_ACTIVE event once when replay becomes ready
+            if replay_ready and not self._replay_warmed_up:
+                self._replay_warmed_up = True
+                self._emit_event(
+                    EventType.REPLAY_ACTIVE,
+                    "Replay buffer ready — replay training active",
+                )
+            
+            # Capture Bellman details periodically (every 10 training steps when replay is ready)
+            capture_bellman = (self._metrics.get("training_transitions", 0) % 10 == 0) and replay_ready
+            
             t_opt_start = time.monotonic()
             optimizer_steps_before = self._agent.trainer.training_step
             # Unified optimization step (replaces dual-update loop)
-            losses = self._agent.maybe_optimize()
+            losses = self._agent.maybe_optimize(capture_bellman=capture_bellman)
             self._metrics["time_optimization"] = (
                 (self._metrics.get("time_optimization") or 0.0) + time.monotonic() - t_opt_start
             )
@@ -1147,6 +1167,7 @@ class TrainingController:
             run_id=self._run_id,
             episode_id=self._episode_id,
             step_id=self._step_id,
+            history_revision=self._history_revision,
             metrics=self.get_metrics(),
             recent_events=recent_events,
             bellman_details=bellman_details,

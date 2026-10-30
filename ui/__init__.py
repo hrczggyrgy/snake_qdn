@@ -35,8 +35,6 @@ from ui.game import (
     render_outcome_summary,
 )
 from ui.inspection import (
-    render_inspect_learning,
-    render_inspect_learning_simple,
     render_training_diagnostics,
 )
 from ui.styles import (
@@ -86,8 +84,6 @@ __all__ = [
     "render_metrics_row",
     "render_outcome_summary",
     # inspection
-    "render_inspect_learning",
-    "render_inspect_learning_simple",
     "render_training_diagnostics",
     # styles
     "ACTION_NAMES",

@@ -152,6 +152,7 @@ class QTrainer:
         # Training stats
         self.training_step = 0
         self.loss_history: list[float] = []
+        self._max_loss_history = 10000  # Bound loss history to prevent unbounded growth
 
     def soft_update_target(self) -> None:
         """Soft update target network parameters."""
@@ -228,6 +229,9 @@ class QTrainer:
         self.training_step += 1
         loss_val: float = loss.item()
         self.loss_history.append(loss_val)
+        # Bound loss history to prevent unbounded growth
+        if len(self.loss_history) > self._max_loss_history:
+            self.loss_history = self.loss_history[-self._max_loss_history:]
 
         if capture_details:
             # Capture details for the first transition in batch

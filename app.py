@@ -91,6 +91,12 @@ def init_ui_state():
 
 init_ui_state()
 
+# Initialize history revision tracking for score chart caching
+if "last_history_revision" not in st.session_state:
+    st.session_state.last_history_revision = -1
+if "cached_score_chart" not in st.session_state:
+    st.session_state.cached_score_chart = None
+
 
 # =============================================================================
 # Fragment 1: Execution + Game Board (Game Frequency: 50-100ms)
@@ -181,18 +187,26 @@ def create_execution_fragment():
                     st.markdown(event_html, unsafe_allow_html=True)
 
         with progress_col:
-            # Score Chart (main progress indicator) - rebuilt but only updates on episode changes
-            fig_score = render_score_chart(
-                snapshot.recent_scores,
-                snapshot.recent_mean_scores,
-                snapshot.episode,
-            )
-            st.plotly_chart(
-                fig_score,
-                width="stretch",
-                config={"displayModeBar": False},
-                key="live_score_chart",
-            )
+            # Score Chart (main progress indicator) - cached, only rebuilds when history revision changes
+            current_revision = snapshot.history_revision
+            if current_revision != st.session_state.last_history_revision:
+                fig_score = render_score_chart(
+                    snapshot.recent_scores,
+                    snapshot.recent_mean_scores,
+                    snapshot.episode,
+                )
+                st.session_state.cached_score_chart = fig_score
+                st.session_state.last_history_revision = current_revision
+            else:
+                fig_score = st.session_state.cached_score_chart
+            
+            if fig_score:
+                st.plotly_chart(
+                    fig_score,
+                    width="stretch",
+                    config={"displayModeBar": False},
+                    key="live_score_chart",
+                )
 
             # Episode Outcome Summary
             if ctl.agent and hasattr(ctl.agent, "termination_history"):
@@ -300,6 +314,17 @@ def inspect_learning_fragment():
                 st.rerun()
         else:
             st.caption("Network activations unavailable (no agent)")
+
+    # Bellman Update Explanation (live, updates with fragment)
+    if snapshot.bellman_details is not None:
+        st.markdown("---")
+        st.caption("**Bellman Update** — sampled from replay (may differ from visible board)")
+        from ui.charts import render_bellman_update
+        fig_bellman = render_bellman_update(snapshot.bellman_details)
+        if fig_bellman:
+            st.plotly_chart(
+                fig_bellman, width="stretch", config={"displayModeBar": False}, key="inspect_bellman"
+            )
 
 
 # =============================================================================

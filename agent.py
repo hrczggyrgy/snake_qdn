@@ -312,9 +312,12 @@ class Agent:
         loss = self.trainer.train_step(states_t, actions_t, rewards_t, next_states_t, terminated_t)
         return loss  # type: ignore
 
-    def maybe_optimize(self) -> list[float]:
+    def maybe_optimize(self, capture_bellman: bool = False) -> list[float]:
         """
         Unified optimization step following replay schedule.
+
+        Args:
+            capture_bellman: If True, capture Bellman details on the last gradient step
 
         Returns:
             List of loss values from each gradient step (empty if no training occurred)
@@ -346,8 +349,8 @@ class Agent:
             next_states_t = torch.FloatTensor(next_states)
             terminated_t = torch.BoolTensor(terminated)
 
-            # Capture Bellman details on the last gradient step for visualization
-            if i == self.gradient_steps - 1:
+            # Capture Bellman details on the last gradient step only if requested
+            if i == self.gradient_steps - 1 and capture_bellman:
                 loss, details = self.trainer.train_step(
                     states_t, actions_t, rewards_t, next_states_t, terminated_t,
                     capture_details=True
