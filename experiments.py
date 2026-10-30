@@ -468,11 +468,14 @@ class ExperimentRunner:
                 if config.budget.max_env_transitions is not None:
                     remaining_for_final = max(0, config.budget.max_env_transitions - total_transitions)
                     # Stop training if we don't have enough budget left for final evaluation
-                    # Need at least min_final_eval_budget for final evaluation (4 episodes * ~100 steps)
+                    # Need at least min_final_eval_budget for final evaluation (4 episodes * 100 steps)
                     min_final_eval_budget = eval_episodes * 2 * 100
                     # Use the smaller of reserved budget and minimum needed
                     required_final_budget = min(final_eval_transition_budget, min_final_eval_budget)
-                    if remaining_for_final <= required_final_budget:
+                    # Ensure minimum training budget (at least 10 steps before we start reserving for final)
+                    min_training_budget = 10
+                    training_done = total_transitions - eval_transitions_used
+                    if training_done >= min_training_budget and remaining_for_final <= required_final_budget:
                         stopped_reason = "budget_exhausted"
                         break
                 
@@ -486,6 +489,13 @@ class ExperimentRunner:
                 # Auto-restart board on episode end (TRAIN mode)
                 if snap.game_over and controller.mode == ActivityMode.TRAIN:
                     controller.restart_board()
+
+                # Refresh metrics after training step for accurate budget tracking
+                metrics = controller.get_metrics()
+                env_transitions = metrics.get("env_transitions", 0)
+                training_transitions = metrics.get("training_transitions", 0)
+                optimizer_steps = metrics.get("optimizer_updates", 0)
+                total_transitions = env_transitions + eval_transitions_used
 
                 # Periodic evaluation (based on training transitions)
                 if eval_every > 0 and training_transitions - last_eval_transition >= eval_every:
@@ -519,53 +529,68 @@ class ExperimentRunner:
                         # Protect final eval reserve: periodic eval can only use (remaining - final_reserve)
                         protected_remaining = max(0, remaining_for_final - final_eval_transition_budget)
                         eval_budget = min(eval_budget, protected_remaining)
-
-                    # Check remaining wall time budget for evaluation
-                    remaining_time = None
-                    if config.budget.max_wall_time_seconds is not None:
-                        elapsed = time.monotonic() - start_time
-                        remaining_time = config.budget.max_wall_time_seconds - elapsed - 0.1
-                        # Skip if less than 1 second remaining
-                        if remaining_time < 1.0:
-                            if verbose:
-                                print(f"  Skipping periodic evaluation: insufficient wall time budget")
-                            last_eval_transition = training_transitions
-                        else:
-                            eval_record, cutoff_reason = self.evaluate_policy(
-                                agent=controller.agent,
-                                env_config=config.env_config,
-                                n_episodes=eval_episodes,
-                                episode_seeds=ep_seeds,
-                                deadline=time.monotonic() + remaining_time,
-                                max_total_steps=eval_budget,
-                                max_steps_per_episode=100,
-                            )
-                            eval_record.training_transition = training_transitions
-                            evaluation_history.append(eval_record)
-                            last_eval_transition = training_transitions
-                            eval_transitions_used += eval_record.total_steps
-                            
-                            if cutoff_reason != "completed":
-                                if verbose:
-                                    print(f"  Periodic evaluation cutoff: {cutoff_reason}")
-                            elif verbose:
-                                print(f"  Eval mean: {eval_record.mean_score:.2f} ± {eval_record.std_score:.2f} "
-                                      f"(time: {eval_record.eval_time:.2f}s, completed: {eval_record.completed_episodes}/{eval_record.requested_episodes})")
-                    else:
-                        # No wall time budget - use the already-calculated eval_budget
-                        eval_record, cutoff_reason = self.evaluate_policy(
-                            agent=controller.agent,
-                            env_config=config.env_config,
-                            n_episodes=eval_episodes,
-                            episode_seeds=ep_seeds,
-                            deadline=time.monotonic() + 30.0,  # 30 second max per evaluation
-                            max_total_steps=eval_budget,
-                            max_steps_per_episode=100,
-                        )
-                        eval_record.training_transition = training_transitions
-                        evaluation_history.append(eval_record)
+                    
+                    # Skip periodic evaluation if no budget remains
+                    if eval_budget <= 0:
+                        if verbose:
+                            print(f"  Skipping periodic evaluation: no transition budget remaining")
                         last_eval_transition = training_transitions
-                        eval_transitions_used += eval_record.total_steps
+                    else:
+                        # Check remaining wall time budget for evaluation
+                        remaining_time = None
+                        if config.budget.max_wall_time_seconds is not None:
+                            elapsed = time.monotonic() - start_time
+                            # Reserve time for final evaluation (10% of total wall time or 30s, whichever is smaller)
+                            final_eval_time_reserve = 30.0
+                            if config.budget.max_wall_time_seconds <= 600:
+                                final_eval_time_reserve = config.budget.max_wall_time_seconds * 0.1
+                            remaining_time = config.budget.max_wall_time_seconds - elapsed - final_eval_time_reserve
+                            # Skip if less than 1 second remaining
+                            if remaining_time < 1.0:
+                                if verbose:
+                                    print(f"  Skipping periodic evaluation: insufficient wall time budget (reserving for final)")
+                                last_eval_transition = training_transitions
+                            else:
+                                eval_record, cutoff_reason = self.evaluate_policy(
+                                    agent=controller.agent,
+                                    env_config=config.env_config,
+                                    n_episodes=eval_episodes,
+                                    episode_seeds=ep_seeds,
+                                    deadline=time.monotonic() + remaining_time,
+                                    max_total_steps=eval_budget,
+                                    max_steps_per_episode=100,
+                                )
+                                eval_record.training_transition = training_transitions
+                                evaluation_history.append(eval_record)
+                                last_eval_transition = training_transitions
+                                eval_transitions_used += eval_record.total_steps
+                                
+                                if cutoff_reason != "completed":
+                                    if verbose:
+                                        print(f"  Periodic evaluation cutoff: {cutoff_reason}")
+                                elif verbose:
+                                    print(f"  Eval mean: {eval_record.mean_score:.2f} ± {eval_record.std_score:.2f} "
+                                          f"(time: {eval_record.eval_time:.2f}s, completed: {eval_record.completed_episodes}/{eval_record.requested_episodes})")
+                        else:
+                            # No wall time budget - use the already-calculated eval_budget
+                            if eval_budget <= 0:
+                                if verbose:
+                                    print(f"  Skipping periodic evaluation: no transition budget remaining")
+                                last_eval_transition = training_transitions
+                            else:
+                                eval_record, cutoff_reason = self.evaluate_policy(
+                                    agent=controller.agent,
+                                    env_config=config.env_config,
+                                    n_episodes=eval_episodes,
+                                    episode_seeds=ep_seeds,
+                                    deadline=time.monotonic() + 30.0,  # 30 second max per evaluation
+                                    max_total_steps=eval_budget,
+                                    max_steps_per_episode=100,
+                                )
+                                eval_record.training_transition = training_transitions
+                                evaluation_history.append(eval_record)
+                                last_eval_transition = training_transitions
+                                eval_transitions_used += eval_record.total_steps
 
         except KeyboardInterrupt:
             stopped_reason = "interrupted"

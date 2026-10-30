@@ -507,11 +507,15 @@ class TestPeriodicEvaluationSeeds:
     """Tests for periodic evaluation seed allocation."""
 
     def test_periodic_evaluation_seeds_dont_run_out(self):
-        """Periodic evaluations should have explicit seeds even after many evaluations."""
+        """Periodic evaluations should have explicit seeds even after many evaluations.
+        
+        Note: With correct budget tracking, evaluations near budget exhaustion may be incomplete.
+        This test uses a sufficient budget to ensure several complete evaluations.
+        """
         runner = ExperimentRunner("test_periodic_seeds")
         config = get_baseline_experiment()
-        # Budget must accommodate: training (~100) + 2 periodic evals (2*2*~100=400) + final eval (4*~100=400) = ~900
-        config.budget = ExperimentBudget(max_env_transitions=1000)
+        # Budget: final reserve=400, training=~400, 5 periodic evals=~1000, total=~1800
+        config.budget = ExperimentBudget(max_env_transitions=2000)
         config.agent_config.learning_starts = 50
         config.agent_config.batch_size = 16
         
@@ -521,13 +525,17 @@ class TestPeriodicEvaluationSeeds:
         assert len(result.evaluation_history) >= 2, \
             f"Expected at least 2 evaluations, got {len(result.evaluation_history)}"
         
-        # Each evaluation should have exactly eval_episodes seeds and scores
+        # Each evaluation should have up to eval_episodes seeds and scores (may be fewer if budget exhausted)
         for e in result.evaluation_history:
-            assert len(e.episode_seeds) == 2, f"Expected 2 seeds, got {len(e.episode_seeds)}: {e.episode_seeds}"
-            assert len(e.episode_scores) == 2, f"Expected 2 scores, got {len(e.episode_scores)}"
+            assert len(e.episode_seeds) <= 2, f"Expected at most 2 seeds, got {len(e.episode_seeds)}: {e.episode_seeds}"
+            assert len(e.episode_scores) == len(e.episode_seeds), f"Scores/seeds mismatch: {len(e.episode_scores)} vs {len(e.episode_seeds)}"
             # Seeds should be non-None integers
             for s in e.episode_seeds:
                 assert s is not None and isinstance(s, int), f"Seed should be int: {s}"
+            # Incomplete evaluations should have explicit cutoff reason
+            if len(e.episode_seeds) < 2:
+                assert e.cutoff_reason in ("step_budget_exceeded", "horizon_cutoff", "deadline_exceeded"), \
+                    f"Incomplete eval missing cutoff reason: {e.cutoff_reason}"
         
         # Final evaluation should also have seeds
         assert result.final_evaluation is not None
