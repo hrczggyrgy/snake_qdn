@@ -221,6 +221,7 @@ class ExperimentRunner:
         max_steps_per_episode: int = 200,
         episode_seeds: list[int] | None = None,
         deadline: float | None = None,
+        max_total_steps: int | None = None,
     ) -> tuple[EvaluationRecord, str]:
         """
         Evaluate a policy in isolation without affecting training state.
@@ -232,6 +233,7 @@ class ExperimentRunner:
             max_steps_per_episode: Step limit per episode
             episode_seeds: List of seeds for each episode (must be provided for reproducibility)
             deadline: Optional wall-clock deadline (monotonic time). If exceeded, evaluation stops.
+            max_total_steps: Optional maximum total evaluation steps across all episodes. If exceeded, evaluation stops.
         
         Returns:
             Tuple of (EvaluationRecord, cutoff_reason)
@@ -244,8 +246,31 @@ class ExperimentRunner:
             raise ValueError("n_episodes must be positive")
         if max_steps_per_episode <= 0:
             raise ValueError("max_steps_per_episode must be positive")
+        if max_total_steps is not None and max_total_steps <= 0:
+            raise ValueError("max_total_steps must be positive")
         
         deadline_checker = _DeadlineChecker(deadline)
+        
+        # Step budget checker (similar to deadline checker)
+        class _StepBudgetChecker:
+            def __init__(self, max_steps: int | None):
+                self.max_steps = max_steps
+                self.steps = 0
+            
+            def is_exceeded(self) -> bool:
+                if self.max_steps is None:
+                    return False
+                return self.steps >= self.max_steps
+            
+            def increment(self) -> None:
+                self.steps += 1
+            
+            def remaining(self) -> int | None:
+                if self.max_steps is None:
+                    return None
+                return max(0, self.max_steps - self.max_steps)
+        
+        step_budget_checker = _StepBudgetChecker(max_total_steps)
         
         # Create evaluation environment (no rendering)
         eval_env = SnakeGameAI(
@@ -287,13 +312,18 @@ class ExperimentRunner:
                         cutoff_reason = "deadline_exceeded"
                         break
                     
+                    if step_budget_checker.is_exceeded():
+                        cutoff_reason = "step_budget_exceeded"
+                        break
+                    
                     action = agent.get_action(state, training=False)
                     state, reward, terminated, truncated, info = eval_env.step(action)
                     done = terminated or truncated
                     steps += 1
                     total_steps += 1
+                    step_budget_checker.increment()
                 
-                if cutoff_reason == "deadline_exceeded":
+                if cutoff_reason in ("deadline_exceeded", "step_budget_exceeded"):
                     break
                 
                 # Episode completed (either terminated, truncated, or horizon reached)
@@ -482,6 +512,7 @@ class ExperimentRunner:
                                 n_episodes=eval_episodes,
                                 episode_seeds=ep_seeds,
                                 deadline=time.monotonic() + remaining_time,
+                                max_total_steps=eval_budget,
                             )
                             eval_record.training_transition = training_transitions
                             evaluation_history.append(eval_record)
@@ -496,12 +527,14 @@ class ExperimentRunner:
                                       f"(time: {eval_record.eval_time:.2f}s, completed: {eval_record.completed_episodes}/{eval_record.requested_episodes})")
                     else:
                         # No wall time budget - run evaluation with generous deadline
+                        eval_budget = eval_episodes * 200  # rough estimate
                         eval_record, cutoff_reason = self.evaluate_policy(
                             agent=controller.agent,
                             env_config=config.env_config,
                             n_episodes=eval_episodes,
                             episode_seeds=ep_seeds,
                             deadline=time.monotonic() + 30.0,  # 30 second max per evaluation
+                            max_total_steps=eval_budget,
                         )
                         eval_record.training_transition = training_transitions
                         evaluation_history.append(eval_record)
@@ -533,12 +566,14 @@ class ExperimentRunner:
                 remaining_time = config.budget.max_wall_time_seconds - elapsed
             
             try:
+                final_eval_budget = eval_episodes * 2 * 200  # rough estimate
                 final_eval_record, cutoff_reason = self.evaluate_policy(
                     agent=controller.agent,
                     env_config=config.env_config,
                     n_episodes=eval_episodes * 2,
                     episode_seeds=final_eval_seeds,
                     deadline=time.monotonic() + remaining_time if remaining_time is not None else None,
+                    max_total_steps=final_eval_budget,
                 )
                 final_evaluation = FinalEvaluation(
                     episode_seeds=final_eval_record.episode_seeds,
