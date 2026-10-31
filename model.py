@@ -10,6 +10,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
+from observation_schema import OBSERVATION_SIZE
+
 # Set PyTorch thread counts for optimal small-model CPU performance.
 # For small networks (11->256->256->3), single-threaded execution avoids
 # threading overhead and is 2x faster than the default (often 2-4 threads).
@@ -27,7 +29,7 @@ class Linear_QNet(nn.Module):
     Feedforward Neural Network for Q-Learning.
 
     Architecture:
-    - Input: 11 features (state vector)
+    - Input: 22 features (state vector)
     - Hidden 1: 256 units, ReLU
     - Hidden 2: 256 units, ReLU
     - Output: 3 Q-values (Straight, Right, Left)
@@ -35,7 +37,7 @@ class Linear_QNet(nn.Module):
 
     def __init__(
         self,
-        input_size: int = 11,
+        input_size: int = OBSERVATION_SIZE,
         hidden_size: int = 256,
         output_size: int = 3,
         dropout: float = 0.1,

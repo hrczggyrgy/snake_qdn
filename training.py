@@ -18,6 +18,7 @@ import numpy as np
 
 from agent import Agent
 from snake_env import SnakeGameAI
+from observation_schema import OBSERVATION_SIZE
 
 # Module logger
 logger = logging.getLogger(__name__)
@@ -196,7 +197,7 @@ class EnvConfig:
 class AgentConfig:
     """Validated agent configuration."""
 
-    input_size: int = 11
+    input_size: int = OBSERVATION_SIZE
     hidden_size: int = 256
     output_size: int = 3
     lr: float = 0.001
@@ -567,6 +568,15 @@ class TrainingController:
         )
 
     def _create_agent(self) -> Agent:
+        # Validate that agent input size matches environment observation space
+        expected = self.env.observation_space_shape[0]
+
+        if self.agent_config.input_size != expected:
+            raise ValueError(
+                f"Agent expects {self.agent_config.input_size} inputs, "
+                f"but environment produces {expected}"
+            )
+
         return Agent(
             input_size=self.agent_config.input_size,
             hidden_size=self.agent_config.hidden_size,
@@ -1219,7 +1229,7 @@ class TrainingController:
                 step_id=self._step_id,
                 episode_id=self._episode_id,
                 model_revision=0,  # TODO: track model revision when weights change significantly
-                observation=obs.copy() if obs is not None else np.zeros(11, dtype=np.float32),
+                observation=obs.copy() if obs is not None else np.zeros(OBSERVATION_SIZE, dtype=np.float32),
                 q_values=q_vals.copy(),
                 action_probs=probs.copy(),
                 action=action,
@@ -1233,7 +1243,7 @@ class TrainingController:
             model_revision = 0  # TODO: increment when model weights change significantly
 
         return TrainingSnapshot(
-            observation=obs if obs is not None else np.zeros(11, dtype=np.float32),
+            observation=obs if obs is not None else np.zeros(OBSERVATION_SIZE, dtype=np.float32),
             game_state=self._game_state or {},
             q_values=q_vals,
             action_probs=probs,

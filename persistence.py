@@ -18,7 +18,7 @@ import torch
 CHECKPOINT_VERSION = 3
 
 # Observation/reward schema version for compatibility checking
-OBSERVATION_SCHEMA_VERSION = 1
+from observation_schema import OBSERVATION_SCHEMA_VERSION
 REWARD_SCHEMA_VERSION = 1
 
 

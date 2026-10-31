@@ -7,6 +7,7 @@ from collections import deque
 import numpy as np
 import pytest
 
+from observation_schema import OBSERVATION_SIZE
 from snake_env import SnakeGameAI
 
 
@@ -18,7 +19,7 @@ class TestSnakeEnvironment:
         env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
         obs, info = env.reset(seed=42)
 
-        assert obs.shape == (11,), f"Expected obs shape (11,), got {obs.shape}"
+        assert obs.shape == (OBSERVATION_SIZE,), f"Expected obs shape ({OBSERVATION_SIZE},), got {obs.shape}"
         assert "score" in info
         assert info["score"] == 0
         env.close()
@@ -31,7 +32,7 @@ class TestSnakeEnvironment:
         for _ in range(5):
             action = np.random.randint(0, 3)
             obs, reward, terminated, truncated, info = env.step(action)
-            assert obs.shape == (11,)
+            assert obs.shape == (OBSERVATION_SIZE,)
             assert isinstance(reward, float)
             assert isinstance(terminated, bool)
             assert isinstance(truncated, bool)
@@ -57,7 +58,7 @@ class TestSnakeEnvironment:
         env = SnakeGameAI(grid_size=3, render_mode="rgb_array")
         obs, info = env.reset(seed=42)
 
-        assert obs.shape == (11,)
+        assert obs.shape == (OBSERVATION_SIZE,)
         for seg in env.snake:
             assert 0 <= seg[0] < 3 and 0 <= seg[1] < 3, f"Snake segment {seg} out of bounds"
 
@@ -216,7 +217,7 @@ class TestSnakeEnvironment:
         env.reset()
         obs = env._get_observation()
 
-        assert obs.shape == (11,)
+        assert obs.shape == (OBSERVATION_SIZE,)
         assert obs.dtype == np.float32
 
         # Danger values should be 0 or 1
@@ -227,7 +228,7 @@ class TestSnakeEnvironment:
         assert dir_sum == 1.0
 
         # Food directions: 0 or 1
-        assert all(v in [0.0, 1.0] for v in obs[7:])
+        assert all(v in [0.0, 1.0] for v in obs[7:11])
 
         env.close()
 
@@ -245,7 +246,7 @@ class TestSnakeEnvironment:
         assert "game_over" in state
         assert "grid_size" in state
         assert "observation" in state
-        assert state["observation"].shape == (11,)
+        assert state["observation"].shape == (OBSERVATION_SIZE,)
 
         env.close()
 

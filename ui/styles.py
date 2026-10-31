@@ -598,6 +598,10 @@ STATE_LABELS = [
     ("Danger", ["Straight", "Right", "Left"]),
     ("Direction", ["Left", "Right", "Up", "Down"]),
     ("Food", ["Left", "Right", "Up", "Down"]),
+    ("Food Displacement", ["Dx", "Dy"]),
+    ("Wall Distance", ["Left", "Right", "Up", "Down"]),
+    ("Snake State", ["Length", "Timeout"]),
+    ("Reachable Space", ["Straight", "Right", "Left"]),
 ]
 
 STATE_LABELS_FLAT = [
@@ -612,6 +616,17 @@ STATE_LABELS_FLAT = [
     "Food Right",
     "Food Up",
     "Food Down",
+    "Food Dx",
+    "Food Dy",
+    "Wall Left",
+    "Wall Right",
+    "Wall Up",
+    "Wall Down",
+    "Snake Length",
+    "Timeout Progress",
+    "Space Straight",
+    "Space Right",
+    "Space Left",
 ]
 
 # Action names

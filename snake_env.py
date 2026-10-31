@@ -2,7 +2,32 @@
 Snake Environment following Gymnasium API conventions.
 
 This module implements a discrete grid-based Snake game environment
-with an 11-dimensional observation space and 3 discrete actions.
+with a 22-dimensional observation space and 3 discrete actions.
+
+Observation Space (22-dim boolean/normalized vector):
+- [0-2]: Danger straight, right, left (collision within 1 step)
+- [3-6]: Current direction (left, right, up, down) - one-hot
+- [7-10]: Food relative location (left, right, up, down)
+- [11-12]: Food displacement (dx, dy) normalized to [-1, 1]
+- [13-16]: Wall distances (left, right, up, down) normalized to [0, 1]
+- [17]: Snake length / board area [0, 1]
+- [18]: Timeout progress (steps since food / max steps) [0, 1]
+- [19-21]: Reachable space after straight/right/left actions [0, 1]
+
+Action Space (3 discrete):
+- 0: Straight
+- 1: Turn Right
+- 2: Turn Left
+
+Rewards:
+- Eating food: +10
+- Game Over: -10
+- Step penalty: -0.01 (configurable)
+
+Collision Rules:
+- allow_tail_entry: If True, moving into the tail cell is allowed when the snake
+  doesn't grow that step (tail moves away). This is the standard Snake rule.
+  If False, the tail cell is always treated as collision.
 
 Uses instance-local random generators for RNG isolation.
 """
@@ -12,6 +37,8 @@ from collections import deque
 from typing import Any
 
 import numpy as np
+
+from observation_schema import OBSERVATION_SIZE
 
 
 class SnakeGameAI:
@@ -65,7 +92,7 @@ class SnakeGameAI:
 
         # Action mapping: 0=straight, 1=right, 2=left
         self.action_space_n = 3
-        self.observation_space_shape = (11,)
+        self.observation_space_shape = (OBSERVATION_SIZE,)
 
         # Direction vectors: [right, down, left, up] (clockwise)
         self.directions = np.array(
@@ -276,70 +303,151 @@ class SnakeGameAI:
         # action == 0: keep current direction
 
     def _get_observation(self) -> np.ndarray:
-        """
-        Get 11-dimensional observation vector:
-        [danger_straight, danger_right, danger_left,
-         dir_left, dir_right, dir_up, dir_down,
-         food_left, food_right, food_up, food_down]
-        """
-        head = self.snake[0]
+        hx, hy = self.snake[0]
+        n = self.grid_size
+        scale = n - 1
 
-        # Danger detection (one step ahead in each relative direction)
-        # Straight danger
-        straight_dir = self.direction
-        straight_pos = (
-            head[0] + self.directions[straight_dir][0],
-            head[1] + self.directions[straight_dir][1],
+        # Relative action order: straight, right, left.
+        headings = (
+            self.direction,
+            (self.direction + 1) % 4,
+            (self.direction - 1) % 4,
         )
-        danger_straight = self._is_collision(straight_pos)
 
-        # Right danger
-        right_dir = (self.direction + 1) % 4
-        right_pos = (
-            head[0] + self.directions[right_dir][0],
-            head[1] + self.directions[right_dir][1],
-        )
-        danger_right = self._is_collision(right_pos)
+        next_positions = [
+            (
+                hx + int(self.directions[d][0]),
+                hy + int(self.directions[d][1]),
+            )
+            for d in headings
+        ]
 
-        # Left danger
-        left_dir = (self.direction - 1) % 4
-        left_pos = (head[0] + self.directions[left_dir][0], head[1] + self.directions[left_dir][1])
-        danger_left = self._is_collision(left_pos)
+        dangers = [
+            float(self._is_collision(pos))
+            for pos in next_positions
+        ]
 
-        # Direction one-hot
-        dir_left = 1.0 if self.direction == 2 else 0.0
-        dir_right = 1.0 if self.direction == 0 else 0.0
-        dir_up = 1.0 if self.direction == 3 else 0.0
-        dir_down = 1.0 if self.direction == 1 else 0.0
+        # Preserve the original heading order: left, right, up, down.
+        direction_flags = [
+            float(self.direction == d)
+            for d in (2, 0, 3, 1)
+        ]
 
-        # Food relative position
         if self.food is None:
-            # Board full - all false
-            food_left = food_right = food_up = food_down = 0.0
+            food_flags = [0.0] * 4
+            food_dx = food_dy = 0.0
         else:
-            food_left = 1.0 if self.food[0] < head[0] else 0.0
-            food_right = 1.0 if self.food[0] > head[0] else 0.0
-            food_up = 1.0 if self.food[1] < head[1] else 0.0
-            food_down = 1.0 if self.food[1] > head[1] else 0.0
+            fx, fy = self.food
+            food_flags = [
+                float(fx < hx),
+                float(fx > hx),
+                float(fy < hy),
+                float(fy > hy),
+            ]
+            food_dx = (fx - hx) / scale
+            food_dy = (fy - hy) / scale
 
-        obs: np.ndarray = np.array(
+        # Terminal wall collisions can put the head outside the board.
+        wall_distances = np.clip(
             [
-                float(danger_straight),
-                float(danger_right),
-                float(danger_left),
-                dir_left,
-                dir_right,
-                dir_up,
-                dir_down,
-                food_left,
-                food_right,
-                food_up,
-                food_down,
+                hx / scale,
+                (n - 1 - hx) / scale,
+                hy / scale,
+                (n - 1 - hy) / scale,
             ],
+            0.0,
+            1.0,
+        ).tolist()
+
+        length_fraction = len(self.snake) / (n * n)
+        timeout_progress = min(
+            1.0,
+            self.steps_since_food / self.max_steps_without_food,
+        )
+
+        # Terminal states do not need hypothetical future moves.
+        if self.game_over:
+            reachable_space = [0.0] * 3
+        else:
+            reachable_space = [
+                self._reachable_space_after_action(action)
+                for action in range(3)
+            ]
+
+        obs = np.asarray(
+            dangers
+            + direction_flags
+            + food_flags
+            + [food_dx, food_dy]
+            + wall_distances
+            + [length_fraction, timeout_progress]
+            + reachable_space,
             dtype=np.float32,
         )
 
+        assert obs.shape == self.observation_space_shape
         return obs
+
+    def _reachable_space_after_action(self, action: int) -> float:
+        """Compute reachable space fraction after taking an action.
+
+        Simulates only the next body configuration, then flood-fills free space.
+        Does not call step(), modify the live snake, or consume random numbers.
+
+        Args:
+            action: 0=straight, 1=right, 2=left
+
+        Returns:
+            Fraction of board reachable from new head (0.0 to 1.0).
+        """
+        if action not in (0, 1, 2):
+            raise ValueError(f"Invalid action: {action}")
+
+        direction_delta = (0, 1, -1)[action]
+        heading = (self.direction + direction_delta) % 4
+
+        hx, hy = self.snake[0]
+        dx, dy = self.directions[heading]
+        new_head = (hx + int(dx), hy + int(dy))
+
+        # Uses the same collision and tail-entry rules as the game.
+        if self._is_collision(new_head):
+            return 0.0
+
+        will_grow = self.food is not None and new_head == self.food
+
+        # Build a hypothetical post-move body without changing self.snake.
+        next_snake = list(self.snake)
+        if not will_grow:
+            next_snake.pop()
+        next_snake.insert(0, new_head)
+
+        # The new head is the flood-fill starting cell, not an obstacle.
+        blocked = set(next_snake[1:])
+        visited = {new_head}
+        queue = deque([new_head])
+        n = self.grid_size
+
+        while queue:
+            x, y = queue.popleft()
+
+            for nx, ny in (
+                (x + 1, y),
+                (x - 1, y),
+                (x, y + 1),
+                (x, y - 1),
+            ):
+                pos = (nx, ny)
+
+                if not (0 <= nx < n and 0 <= ny < n):
+                    continue
+                if pos in blocked or pos in visited:
+                    continue
+
+                visited.add(pos)
+                queue.append(pos)
+
+        return len(visited) / (n * n)
 
     def _is_collision(self, pos: tuple[int, int]) -> bool:
         """Check if position results in collision."""

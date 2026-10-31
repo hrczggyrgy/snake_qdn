@@ -239,7 +239,7 @@ def inspect_learning_fragment():
     st.markdown("### 🔬 Inspect Learning")
 
     # State Vector
-    st.caption("State Representation (11D) — grouped by Danger / Direction / Food")
+    st.caption("State Representation (22D) — grouped by Danger / Direction / Food / Displacement / Walls / Space")
     from ui.charts import render_state_vector
 
     fig_sv = render_state_vector(snapshot.observation)

@@ -151,17 +151,18 @@ def test_construction_order_template_then_chart_specific():
 
 
 def test_state_vector_margins_sufficient_for_labels():
-    """State vector chart should have sufficient left margin for 11 labels."""
+    """State vector chart should have sufficient left margin for 22 labels."""
     import numpy as np
 
     from ui.charts import render_state_vector
+    from observation_schema import OBSERVATION_SIZE
 
-    obs = np.ones(11, dtype=np.float32)
+    obs = np.ones(OBSERVATION_SIZE, dtype=np.float32)
     fig = render_state_vector(obs)
 
     assert fig is not None
-    assert fig.layout.height == 360  # CHART_HEIGHT_STATE
-    assert fig.layout.margin.l >= 115  # Sufficient for labels
+    assert fig.layout.height == 650
+    assert fig.layout.margin.l >= 140  # Sufficient for labels
     assert fig.layout.yaxis.autorange == "reversed"
     assert fig.layout.yaxis.tickfont.size >= 11
 

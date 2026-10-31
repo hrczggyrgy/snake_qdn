@@ -5,6 +5,7 @@ Tests for the TrainingController.
 import numpy as np
 import pytest
 
+from observation_schema import OBSERVATION_SIZE
 from training import ActivityMode, AgentConfig, EnvConfig, TrainingController
 
 
@@ -225,7 +226,7 @@ class TestTrainingController:
 
         # Check all snapshot fields
         assert snap.observation is not None
-        assert snap.observation.shape == (11,)
+        assert snap.observation.shape == (OBSERVATION_SIZE,)
         assert snap.game_state is not None
         assert snap.q_values is not None
         assert snap.q_values.shape == (3,)

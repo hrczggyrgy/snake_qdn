@@ -18,6 +18,7 @@ from ui.styles import (
     STATE_LABELS_FLAT,
     get_plotly_template,
 )
+from observation_schema import OBSERVATION_FEATURES
 
 
 def apply_template(fig: go.Figure, height: int | None = None, uirevision: str | None = None):
@@ -362,21 +363,36 @@ def render_throughput_chart(
 
 
 def render_state_vector(observation: np.ndarray | None) -> go.Figure | None:
-    """Render the 11-dimensional state vector as horizontal bars grouped by category."""
+    """Render the 22-dimensional state vector as horizontal bars grouped by category."""
     if observation is None:
         return None
 
-    labels = STATE_LABELS_FLAT
+    labels = [
+        name.replace("_", " ").title()
+        for name in OBSERVATION_FEATURES
+    ]
 
-    # Color by group: Danger=red, Direction=blue, Food=gold
+    if len(observation) != len(labels):
+        raise ValueError("Observation and feature-label counts differ")
+
+    # Color by group: Danger=red, Direction=blue, Food=gold, 
+    # Food displacement=orange, Wall=purple, Length/timeout=green, Space=teal
     colors = []
     for i, val in enumerate(observation):
         if i < 3:  # Danger
             colors.append("#ff4444" if val > 0.5 else "#44cc44")
         elif i < 7:  # Direction
             colors.append("#4488ff" if val > 0.5 else "rgba(100,100,100,0.3)")
-        else:  # Food
+        elif i < 11:  # Food direction
             colors.append("#ffd700" if val > 0.5 else "rgba(100,100,100,0.3)")
+        elif i < 13:  # Food displacement (dx, dy)
+            colors.append("#ff8800")
+        elif i < 17:  # Wall distances
+            colors.append("#aa44ff")
+        elif i < 19:  # Length, timeout
+            colors.append("#44cc44")
+        else:  # Reachable space
+            colors.append("#00cccc")
 
     fig = go.Figure()
     fig.add_trace(
@@ -385,27 +401,32 @@ def render_state_vector(observation: np.ndarray | None) -> go.Figure | None:
             y=labels,
             orientation="h",
             marker_color=colors,
-            text=[f"{v:.0f}" for v in observation],
+            text=[f"{v:.2f}" for v in observation],
             textposition="inside",
             textfont={"color": "white", "size": 10, "family": "Arial Black"},
             showlegend=False,
-            hovertemplate="%{y}: %{x:.0f}<extra></extra>",
+            hovertemplate="%{y}: %{x:.2f}<extra></extra>",
         )
     )
 
     # Apply template FIRST (base layout)
-    fig = apply_template(fig, height=CHART_HEIGHT_STATE, uirevision="snake-state-vector")
+    fig = apply_template(fig, height=650, uirevision="snake-state-vector")
     # Then chart-specific layout
     fig.update_layout(
-        title={"text": "State Vector (11D)", "font": {"size": 11}},
-        xaxis={"range": [0, 1.1], "showgrid": False, "showticklabels": False, "zeroline": False},
+        title={"text": "State Vector (22D)", "font": {"size": 11}},
+        xaxis={
+            "range": [-1.1, 1.1],
+            "showgrid": False,
+            "showticklabels": True,
+            "zeroline": True,
+        },
         yaxis={
             "showgrid": False,
             "autorange": "reversed",
             "tickfont": {"size": 11},
             "automargin": True,
         },
-        margin={"l": 120, "r": 20, "t": 45, "b": 25},
+        margin={"l": 150, "r": 20, "t": 45, "b": 25},
     )
     return fig
 
@@ -619,7 +640,7 @@ def render_network_activations(
         y_positions = np.linspace(-1, 1, len(indices))
 
         for _j, (idx, y, act) in enumerate(zip(indices, y_positions, display_acts, strict=True)):
-            intensity = min(1.0, act * 2)
+            intensity = min(1.0, abs(float(act)) * 2)
             if layer_idx == 0:
                 color = f"rgba(255, {int(255 * (1 - intensity))}, {int(255 * (1 - intensity))}, 1)"
             elif layer_idx == 3:

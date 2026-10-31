@@ -11,6 +11,7 @@ import torch
 
 from agent import Agent
 from model import Linear_QNet
+from observation_schema import OBSERVATION_SIZE
 from persistence import (
     CHECKPOINT_VERSION,
     CheckpointManager,
@@ -383,7 +384,7 @@ class TestCheckpointManager:
             assert abs(new_agent.epsilon - 0.3) < 0.01
 
             # Verify Q-values match
-            test_state = np.random.randn(11)
+            test_state = np.random.randn(OBSERVATION_SIZE)
             orig_q = agent.get_q_values(test_state)
             loaded_q = new_agent.get_q_values(test_state)
             assert np.allclose(orig_q, loaded_q)
@@ -405,7 +406,7 @@ class TestCheckpointManager:
             assert config.hidden_size == 64
 
             # Q-values match
-            test_state = np.random.randn(11)
+            test_state = np.random.randn(OBSERVATION_SIZE)
             orig_q = agent.get_q_values(test_state)
             loaded_q = new_agent.get_q_values(test_state)
             assert np.allclose(orig_q, loaded_q)

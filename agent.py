@@ -19,6 +19,7 @@ from persistence import (
     ModelConfig,
 )
 from snake_env import SnakeGameAI
+from observation_schema import OBSERVATION_SIZE
 
 
 class ReplayMemory:
@@ -31,7 +32,7 @@ class ReplayMemory:
     storage and sampling.
     """
 
-    def __init__(self, capacity: int = 100_000, state_dim: int = 11):
+    def __init__(self, capacity: int = 100_000, state_dim: int = OBSERVATION_SIZE):
         self.capacity = capacity
         self.state_dim = state_dim
         self.size = 0
@@ -106,7 +107,7 @@ class Agent:
 
     def __init__(
         self,
-        input_size: int = 11,
+        input_size: int = OBSERVATION_SIZE,
         hidden_size: int = 256,
         output_size: int = 3,
         lr: float = 0.001,
@@ -442,9 +443,9 @@ class Agent:
         )
 
     def load_checkpoint(self, filepath: str, env=None) -> dict[str, Any]:
-        """Load agent checkpoint (backward compatible - loads training state)."""
+        """Load agent checkpoint (strict - validates architecture and schema)."""
         manager = CheckpointManager(self, self.trainer.device)
-        return manager.load_full(filepath, strict=False, env=env)  # type: ignore
+        return manager.load_full(filepath, strict=True, env=env)  # type: ignore
 
     def save_weights_only(self, filepath: str) -> None:
         """Save only model weights (for inference/deployment)."""

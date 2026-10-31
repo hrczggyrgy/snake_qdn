@@ -11,6 +11,7 @@ import torch
 
 from agent import Agent, ReplayMemory
 from snake_env import SnakeGameAI
+from observation_schema import OBSERVATION_SIZE
 
 
 class TestReplayMemory:
@@ -22,10 +23,10 @@ class TestReplayMemory:
 
         for _ in range(10):
             memory.push(
-                np.random.randn(11).astype(np.float32),
+                np.random.randn(OBSERVATION_SIZE).astype(np.float32),
                 np.random.randint(0, 3),
                 np.random.randn(),
-                np.random.randn(11).astype(np.float32),
+                np.random.randn(OBSERVATION_SIZE).astype(np.float32),
                 False,
                 False,
             )
@@ -38,10 +39,10 @@ class TestReplayMemory:
 
         for _ in range(50):
             memory.push(
-                np.random.randn(11).astype(np.float32),
+                np.random.randn(OBSERVATION_SIZE).astype(np.float32),
                 np.random.randint(0, 3),
                 np.random.randn(),
-                np.random.randn(11).astype(np.float32),
+                np.random.randn(OBSERVATION_SIZE).astype(np.float32),
                 bool(np.random.randint(0, 2)),
                 bool(np.random.randint(0, 2)),
             )
@@ -49,13 +50,13 @@ class TestReplayMemory:
         batch_size = 32
         states, actions, rewards, next_states, terminated, truncated = memory.sample(batch_size)
 
-        assert states.shape == (batch_size, 11)
+        assert states.shape == (batch_size, OBSERVATION_SIZE)
         assert states.dtype == np.float32
         assert actions.shape == (batch_size,)
         assert actions.dtype == np.int64
         assert rewards.shape == (batch_size,)
         assert rewards.dtype == np.float32
-        assert next_states.shape == (batch_size, 11)
+        assert next_states.shape == (batch_size, OBSERVATION_SIZE)
         assert next_states.dtype == np.float32
         assert terminated.shape == (batch_size,)
         assert terminated.dtype == bool
@@ -68,7 +69,7 @@ class TestReplayMemory:
         assert not memory.is_ready(32)
 
         for _ in range(32):
-            memory.push(np.random.randn(11), 0, 0.0, np.random.randn(11), False, False)
+            memory.push(np.random.randn(OBSERVATION_SIZE), 0, 0.0, np.random.randn(OBSERVATION_SIZE), False, False)
 
         assert memory.is_ready(32)
 
@@ -77,7 +78,7 @@ class TestReplayMemory:
         memory = ReplayMemory(capacity=100)
 
         for _ in range(10):
-            memory.push(np.random.randn(11), 0, 0.0, np.random.randn(11), True, False)
+            memory.push(np.random.randn(OBSERVATION_SIZE), 0, 0.0, np.random.randn(OBSERVATION_SIZE), True, False)
 
         states, actions, rewards, next_states, terminated, truncated = memory.sample(5)
 
@@ -101,7 +102,7 @@ class TestAgent:
     def test_action_selection_training(self):
         """Test action selection in training mode."""
         agent = Agent(hidden_size=64, memory_size=1000, batch_size=32, epsilon_start=1.0)
-        state = np.random.randn(11)
+        state = np.random.randn(OBSERVATION_SIZE)
 
         action = agent.get_action(state, training=True)
         assert 0 <= action <= 2
@@ -109,7 +110,7 @@ class TestAgent:
     def test_action_selection_evaluation(self):
         """Test action selection in evaluation mode (greedy)."""
         agent = Agent(hidden_size=64, memory_size=1000, batch_size=32, epsilon_start=0.0)
-        state = np.random.randn(11)
+        state = np.random.randn(OBSERVATION_SIZE)
 
         action = agent.get_action(state, training=False)
         assert 0 <= action <= 2
@@ -117,7 +118,7 @@ class TestAgent:
     def test_get_action_with_reason(self):
         """Test get_action_with_reason returns action and reason."""
         agent = Agent(hidden_size=64, memory_size=1000, batch_size=32, epsilon_start=0.0)
-        state = np.random.randn(11)
+        state = np.random.randn(OBSERVATION_SIZE)
 
         action, reason = agent.get_action_with_reason(state, training=False)
         assert 0 <= action <= 2
@@ -126,7 +127,7 @@ class TestAgent:
     def test_get_action_with_q_values(self):
         """Test get_action_with_q_values returns action, reason, and Q-values."""
         agent = Agent(hidden_size=64, memory_size=1000, batch_size=32, epsilon_start=0.0)
-        state = np.random.randn(11)
+        state = np.random.randn(OBSERVATION_SIZE)
 
         action, reason, q_values = agent.get_action_with_q_values(state, training=False)
         assert 0 <= action <= 2
@@ -137,17 +138,17 @@ class TestAgent:
     def test_memory_store(self):
         """Test storing experiences in memory."""
         agent = Agent(hidden_size=64, memory_size=1000, batch_size=32)
-        state = np.random.randn(11)
+        state = np.random.randn(OBSERVATION_SIZE)
 
-        agent.remember(state, 0, 1.0, np.random.randn(11), False, False)
+        agent.remember(state, 0, 1.0, np.random.randn(OBSERVATION_SIZE), False, False)
         assert len(agent.memory) == 1
 
     def test_short_memory_training(self):
         """Test short memory training returns loss."""
         agent = Agent(hidden_size=64, memory_size=1000, batch_size=32)
-        state = np.random.randn(11)
+        state = np.random.randn(OBSERVATION_SIZE)
 
-        loss = agent.train_short_memory(state, 0, 1.0, np.random.randn(11), False)
+        loss = agent.train_short_memory(state, 0, 1.0, np.random.randn(OBSERVATION_SIZE), False)
         assert isinstance(loss, float)
         assert loss >= 0
 
@@ -164,10 +165,10 @@ class TestAgent:
 
         for _ in range(16):
             agent.remember(
-                np.random.randn(11),
+                np.random.randn(OBSERVATION_SIZE),
                 np.random.randint(0, 3),
                 np.random.randn(),
-                np.random.randn(11),
+                np.random.randn(OBSERVATION_SIZE),
                 False,
                 False,
             )
@@ -236,7 +237,7 @@ class TestAgent:
         # Trainer state preserved
         assert agent.trainer.training_step == 0  # Not stepped yet in this test
         # Model weights preserved (can still act)
-        action = agent.get_action(np.random.randn(11), training=False)
+        action = agent.get_action(np.random.randn(OBSERVATION_SIZE), training=False)
         assert 0 <= action <= 2
 
 
@@ -269,7 +270,7 @@ class TestCheckpoint:
             assert abs(new_agent.epsilon - 0.5) < 0.01
 
             # Verify Q-values match
-            test_state = np.random.randn(11)
+            test_state = np.random.randn(OBSERVATION_SIZE)
             orig_q = agent.get_q_values(test_state)
             loaded_q = new_agent.get_q_values(test_state)
             assert np.allclose(orig_q, loaded_q)
@@ -284,7 +285,7 @@ class TestCheckpoint:
 
             # Try to load into different architecture
             bad_agent = Agent(hidden_size=256)
-            with pytest.raises(RuntimeError):
+            with pytest.raises(ValueError):
                 bad_agent.load_checkpoint(path)
 
     def test_legacy_model_only_checkpoint(self):
@@ -296,7 +297,7 @@ class TestCheckpoint:
             torch.save(
                 {
                     "model_state_dict": agent.model.state_dict(),
-                    "input_size": 11,
+                    "input_size": OBSERVATION_SIZE,
                     "hidden_size": 128,
                     "output_size": 3,
                 },
@@ -307,7 +308,7 @@ class TestCheckpoint:
             legacy_agent.model.load_state_dict(torch.load(path)["model_state_dict"])
 
             # Should be able to use loaded model
-            test_state = np.random.randn(11)
+            test_state = np.random.randn(OBSERVATION_SIZE)
             q = legacy_agent.get_q_values(test_state)
             assert q.shape == (3,)
 
@@ -324,9 +325,10 @@ class TestCheckpoint:
             config = new_agent.load_weights_only(path)
 
             assert config.hidden_size == 128
+            assert config.input_size == OBSERVATION_SIZE
 
             # Q-values should match
-            test_state = np.random.randn(11)
+            test_state = np.random.randn(OBSERVATION_SIZE)
             orig_q = agent.get_q_values(test_state)
             loaded_q = new_agent.get_q_values(test_state)
             assert np.allclose(orig_q, loaded_q)

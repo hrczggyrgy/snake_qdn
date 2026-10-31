@@ -11,6 +11,8 @@ from collections import deque
 import numpy as np
 import torch
 
+from observation_schema import OBSERVATION_SIZE
+
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -24,7 +26,7 @@ def test_snake_env():
     env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
     obs, info = env.reset(seed=42)
 
-    assert obs.shape == (11,), f"Expected obs shape (11,), got {obs.shape}"
+    assert obs.shape == (OBSERVATION_SIZE,), f"Expected obs shape ({OBSERVATION_SIZE},), got {obs.shape}"
     assert "score" in info
     print(f"  ✓ Reset works, obs shape: {obs.shape}")
 
@@ -32,7 +34,7 @@ def test_snake_env():
     for i in range(5):
         action = np.random.randint(0, 3)
         obs, reward, terminated, truncated, info = env.step(action)
-        assert obs.shape == (11,)
+        assert obs.shape == (OBSERVATION_SIZE,)
         print(
             f"  Step {i}: action={action}, reward={reward:.2f}, score={info['score']}, done={terminated}"
         )
@@ -50,7 +52,7 @@ def test_snake_env():
     # Test minimum grid size (3x3)
     env = SnakeGameAI(grid_size=3, render_mode="rgb_array")
     obs, info = env.reset(seed=42)
-    assert obs.shape == (11,)
+    assert obs.shape == (OBSERVATION_SIZE,)
     # Verify snake is within bounds
     for seg in env.snake:
         assert 0 <= seg[0] < 3 and 0 <= seg[1] < 3, (
@@ -135,10 +137,10 @@ def test_agent():
     memory = ReplayMemory(capacity=1000)
     for _ in range(10):
         memory.push(
-            np.random.randn(11),
+            np.random.randn(OBSERVATION_SIZE),
             np.random.randint(0, 3),
             np.random.randn(),
-            np.random.randn(11),
+            np.random.randn(OBSERVATION_SIZE),
             False,
             False,
         )
@@ -158,7 +160,7 @@ def test_agent():
     print("  ✓ Agent created")
 
     # Test action selection
-    state = np.random.randn(11)
+    state = np.random.randn(OBSERVATION_SIZE)
     action = agent.get_action(state, training=True)
     assert 0 <= action <= 2
     print(f"  ✓ Action selection works: {action}")
@@ -169,11 +171,11 @@ def test_agent():
     print(f"  ✓ Greedy action works: {action_greedy}")
 
     # Test memory
-    agent.remember(state, action, 1.0, np.random.randn(11), False)
+    agent.remember(state, action, 1.0, np.random.randn(OBSERVATION_SIZE), False)
     print(f"  ✓ Memory store works, size: {len(agent.memory)}")
 
     # Test short memory training
-    loss = agent.train_short_memory(state, action, 1.0, np.random.randn(11), False)
+    loss = agent.train_short_memory(state, action, 1.0, np.random.randn(OBSERVATION_SIZE), False)
     print(f"  ✓ Short memory training works, loss: {loss:.4f}")
 
     # Test stats
@@ -345,6 +347,7 @@ def test_save_load():
     """Test checkpoint saving and loading."""
     print("Testing Checkpoint Save/Load...")
     import os
+    import tempfile
 
     from agent import Agent
 
@@ -353,44 +356,49 @@ def test_save_load():
     agent.high_score = 15
     agent.epsilon = 0.5
 
-    save_path = "/tmp/test_checkpoint.pth"
-    agent.save_checkpoint(save_path)
-    print(f"  ✓ Checkpoint saved to {save_path}")
+    with tempfile.NamedTemporaryFile(suffix=".pth", delete=False) as f:
+        save_path = f.name
 
-    # Create new agent and load
-    new_agent = Agent(hidden_size=64)
-    info = new_agent.load_checkpoint(save_path)
-    print(
-        f"  ✓ Checkpoint loaded: episode={info['episode']}, epsilon={info['epsilon']:.3f}, high_score={info['high_score']}"
-    )
+    try:
+        agent.save_checkpoint(save_path)
+        print(f"  ✓ Checkpoint saved to {save_path}")
 
-    # Verify returned metadata
-    assert info["episode"] == 42
-    assert info["high_score"] == 15
-    assert abs(info["epsilon"] - 0.5) < 0.01
+        # Create new agent and load
+        new_agent = Agent(hidden_size=64)
+        info = new_agent.load_checkpoint(save_path)
+        print(
+            f"  ✓ Checkpoint loaded: episode={info['episode']}, epsilon={info['epsilon']:.3f}, high_score={info['high_score']}"
+        )
 
-    # Verify agent state was actually restored
-    assert new_agent.n_games == 42, f"Expected n_games=42, got {new_agent.n_games}"
-    assert new_agent.high_score == 15, f"Expected high_score=15, got {new_agent.high_score}"
-    assert abs(new_agent.epsilon - 0.5) < 0.01, f"Expected epsilon=0.5, got {new_agent.epsilon}"
+        # Verify returned metadata
+        assert info["episode"] == 42
+        assert info["high_score"] == 15
+        assert abs(info["epsilon"] - 0.5) < 0.01
 
-    # Verify Q-values are consistent (greedy action should match)
-    test_state = np.random.randn(11)
-    original_action = agent.get_action(test_state, training=False)
-    loaded_action = new_agent.get_action(test_state, training=False)
-    assert original_action == loaded_action, (
-        f"Greedy actions differ: {original_action} vs {loaded_action}"
-    )
+        # Verify agent state was actually restored
+        assert new_agent.n_games == 42, f"Expected n_games=42, got {new_agent.n_games}"
+        assert new_agent.high_score == 15, f"Expected high_score=15, got {new_agent.high_score}"
+        assert abs(new_agent.epsilon - 0.5) < 0.01, f"Expected epsilon=0.5, got {new_agent.epsilon}"
 
-    # Verify full Q-value arrays match (not just argmax)
-    original_q = agent.get_q_values(test_state)
-    loaded_q = new_agent.get_q_values(test_state)
-    assert np.allclose(original_q, loaded_q), (
-        f"Q-values differ:\n  original: {original_q}\n  loaded:   {loaded_q}"
-    )
+        # Verify greedy action matches
+        test_state = np.random.randn(OBSERVATION_SIZE)
+        original_action = agent.get_action(test_state, training=False)
+        loaded_action = new_agent.get_action(test_state, training=False)
+        assert original_action == loaded_action, (
+            f"Greedy actions differ: {original_action} vs {loaded_action}"
+        )
 
-    os.remove(save_path)
-    print("  ✓ Save/Load test passed!\n")
+        # Verify full Q-value arrays match (not just argmax)
+        original_q = agent.get_q_values(test_state)
+        loaded_q = new_agent.get_q_values(test_state)
+        assert np.allclose(original_q, loaded_q), (
+            f"Q-values differ:\n  original: {original_q}\n  loaded:   {loaded_q}"
+        )
+
+        print("  ✓ Save/Load test passed!\n")
+    finally:
+        if os.path.exists(save_path):
+            os.remove(save_path)
 
 
 def test_epsilon_decay_on_episode_completion():

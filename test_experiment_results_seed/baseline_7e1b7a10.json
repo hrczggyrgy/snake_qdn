@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "config": {
+    "name": "baseline",
+    "description": "Baseline DQN with default hyperparameters",
+    "agent_config": {
+      "input_size": 22,
+      "hidden_size": 256,
+      "output_size": 3,
+      "lr": 0.001,
+      "gamma": 0.99,
+      "epsilon_start": 1.0,
+      "epsilon_end": 0.01,
+      "epsilon_decay": 0.995,
+      "memory_size": 100000,
+      "batch_size": 256,
+      "tau": 0.005,
+      "device": "auto",
+      "dropout": 0.1,
+      "learning_starts": 1000,
+      "train_every": 1,
+      "gradient_steps": 1,
+      "epsilon_decay_steps": 0
+    },
+    "env_config": {
+      "grid_size": 20,
+      "step_penalty": -0.01,
+      "food_reward": 10.0,
+      "death_penalty": -10.0,
+      "render_mode": "rgb_array",
+      "seed": null
+    },
+    "budget": {
+      "max_env_transitions": 1000,
+      "max_wall_time_seconds": null,
+      "max_optimizer_steps": null,
+      "max_episodes": null
+    },
+    "seed": 42,
+    "tags": [
+      "baseline"
+    ]
+  },
+  "result": {
+    "experiment_id": "baseline_7e1b7a10",
+    "config_name": "baseline",
+    "seed": 42,
+    "start_time": 237529.488585012,
+    "end_time": 237549.42661891,
+    "wall_time": 19.938033897982677,
+    "total_env_transitions": 500,
+    "total_training_transitions": 500,
+    "total_optimizer_steps": 0,
+    "total_episodes": 9,
+    "final_epsilon": 0.9558895783575597,
+    "best_score": 1,
+    "mean_score_last_50": 0.2222222222222222,
+    "mean_score_last_10": 0,
+    "termination_counts": {
+      "wall": 9,
+      "self": 0,
+      "timeout": 0,
+      "victory": 0
+    },
+    "scores_history": [
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      0,
+      0,
+      0
+    ],
+    "mean_scores_history": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.2,
+      0.3333333333333333,
+      0.2857142857142857,
+      0.25,
+      0.2222222222222222
+    ],
+    "epsilon_history": [
+      1.0,
+      0.995,
+      0.990025,
+      0.985074875,
+      0.9801495006250001,
+      0.9752487531218751,
+      0.9703725093562657,
+      0.9655206468094844,
+      0.960693043575437
+    ],
+    "loss_history": [],
+    "evaluation_history": [
+      {
+        "training_transition": 500,
+        "episode_seeds": [
+          1085174816
+        ],
+        "episode_scores": [
+          0
+        ],
+        "mean_score": 0.0,
+        "std_score": 0.0,
+        "eval_time": 1.5312607240048237,
+        "cutoff_reason": "step_budget_exceeded",
+        "requested_episodes": 2,
+        "total_steps": 100
+      }
+    ],
+    "final_evaluation": {
+      "episode_seeds": [
+        1662057957,
+        1405681631,
+        942484272,
+        929893137
+      ],
+      "episode_scores": [
+        0,
+        1,
+        0,
+        1
+      ],
+      "mean_score": 0.5,
+      "std_score": 0.5,
+      "completed_episodes": 4,
+      "cutoff_reason": "horizon_cutoff",
+      "eval_time": 5.40301861599437,
+      "total_steps": 400
+    },
+    "peak_memory_mb": null,
+    "training_time": 11.427368482982274,
+    "evaluation_time": 6.934279339999193,
+    "overhead_time": 1.57638607500121,
+    "completed": true,
+    "stopped_reason": "budget_exhausted"
+  }
+}

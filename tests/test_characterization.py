@@ -16,6 +16,7 @@ import torch
 from agent import Agent, ReplayMemory
 from model import Linear_QNet, QTrainer
 from snake_env import SnakeGameAI
+from observation_schema import OBSERVATION_SIZE
 
 
 def test_train_evaluate_manual_pause_resume_single_step():
@@ -60,7 +61,7 @@ def test_train_evaluate_manual_pause_resume_single_step():
     state, _ = env.reset()
     action = agent.get_action(state, training=True)
     next_state, reward, terminated, truncated, info = env.step(action)
-    assert next_state.shape == (11,)
+    assert next_state.shape == (OBSERVATION_SIZE,)
     print("  ✓ Single step works")
 
     env.close()
@@ -288,7 +289,7 @@ def test_checkpoint_round_trip_incompatible_architecture():
         print("  ✓ Compatible load works")
 
         # Verify Q-values match
-        test_state = np.random.randn(11)
+        test_state = np.random.randn(OBSERVATION_SIZE)
         orig_q = agent.get_q_values(test_state)
         loaded_q = new_agent.get_q_values(test_state)
         assert np.allclose(orig_q, loaded_q)
@@ -307,7 +308,7 @@ def test_checkpoint_round_trip_incompatible_architecture():
         torch.save(
             {
                 "model_state_dict": agent.model.state_dict(),
-                "input_size": 11,
+                "input_size": OBSERVATION_SIZE,
                 "hidden_size": 128,
                 "output_size": 3,
             },
@@ -325,7 +326,7 @@ def test_zero_loss_recorded_not_discarded():
     """Test that zero-valued loss is recorded, not discarded by truthiness checks."""
     print("Testing Zero Loss Recording...")
 
-    model = Linear_QNet(input_size=11, hidden_size=64, output_size=3)
+    model = Linear_QNet(input_size=OBSERVATION_SIZE, hidden_size=64, output_size=3)
     trainer = QTrainer(model, lr=0.001, gamma=0.99, device="cpu")
 
     # Force a zero loss scenario by making prediction = target
@@ -335,10 +336,10 @@ def test_zero_loss_recorded_not_discarded():
         trainer.target_model.fc3.weight.fill_(0.0)
         trainer.target_model.fc3.bias.fill_(0.0)
 
-    state = torch.zeros(1, 11)
+    state = torch.zeros(1, OBSERVATION_SIZE)
     action = torch.tensor([0])
     reward = torch.tensor([0.0])
-    next_state = torch.zeros(1, 11)
+    next_state = torch.zeros(1, OBSERVATION_SIZE)
     terminated = torch.tensor([False])
 
     loss = trainer.train_step(state, action, reward, next_state, terminated)
@@ -351,8 +352,8 @@ def test_zero_loss_recorded_not_discarded():
 
     # Test agent's train_long_memory with zero loss
     agent = Agent(hidden_size=64, memory_size=1000, batch_size=2)
-    agent.remember(np.zeros(11), 0, 0.0, np.zeros(11), False, False)
-    agent.remember(np.zeros(11), 1, 0.0, np.zeros(11), False, False)
+    agent.remember(np.zeros(OBSERVATION_SIZE), 0, 0.0, np.zeros(OBSERVATION_SIZE), False, False)
+    agent.remember(np.zeros(OBSERVATION_SIZE), 1, 0.0, np.zeros(OBSERVATION_SIZE), False, False)
 
     # Mock to force zero loss
     with torch.no_grad():
@@ -397,7 +398,7 @@ def test_food_none_full_board_victory_small_grids_game_over():
     # Small grid (3x3 minimum)
     env = SnakeGameAI(grid_size=3)
     obs, info = env.reset()
-    assert obs.shape == (11,)
+    assert obs.shape == (OBSERVATION_SIZE,)
     for seg in env.snake:
         assert 0 <= seg[0] < 3 and 0 <= seg[1] < 3
     print(f"  ✓ 3x3 grid works, snake: {list(env.snake)}")
@@ -432,10 +433,10 @@ def test_replay_memory_sample_compatibility():
     # Add varied experiences
     for _ in range(50):
         memory.push(
-            np.random.randn(11).astype(np.float32),
+            np.random.randn(OBSERVATION_SIZE).astype(np.float32),
             np.random.randint(0, 3),
             np.random.randn(),
-            np.random.randn(11).astype(np.float32),
+            np.random.randn(OBSERVATION_SIZE).astype(np.float32),
             bool(np.random.randint(0, 2)),
             bool(np.random.randint(0, 2)),
         )
@@ -444,13 +445,13 @@ def test_replay_memory_sample_compatibility():
     batch_size = 32
     states, actions, rewards, next_states, terminated, truncated = memory.sample(batch_size)
 
-    assert states.shape == (batch_size, 11)
+    assert states.shape == (batch_size, OBSERVATION_SIZE)
     assert states.dtype == np.float32
     assert actions.shape == (batch_size,)
     assert actions.dtype == np.int64
     assert rewards.shape == (batch_size,)
     assert rewards.dtype == np.float32
-    assert next_states.shape == (batch_size, 11)
+    assert next_states.shape == (batch_size, OBSERVATION_SIZE)
     assert next_states.dtype == np.float32
     assert terminated.shape == (batch_size,)
     assert terminated.dtype == bool
