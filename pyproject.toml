@@ -3,7 +3,6 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-packages = [{include = "snake_qdn*"}, {include = "ui*"}]
 name = "snake-dqn"
 version = "0.2.0"
 description = "Snake DQN Reinforcement Learning Dashboard"
@@ -20,6 +19,9 @@ dependencies = [
     "gymnasium>=0.28.0",
     "pillow>=10.0.0",
 ]
+
+[tool.setuptools.packages.find]
+include = ["snake_qdn*", "ui*"]
 
 [project.optional-dependencies]
 dev = [

@@ -394,21 +394,21 @@ class SnakeEnv:
                 dx = tail[0] - head[0]
                 dy = tail[1] - head[1]
                 
-                # Rotate by -heading to get relative coordinates
-                # direction: 0=right, 1=down, 2=left, 3=up
-                if self.direction == 0:  # facing right
-                    tail_dx, tail_dy = dx, dy
-                elif self.direction == 1:  # facing down
-                    tail_dx, tail_dy = -dy, dx
-                elif self.direction == 2:  # facing left
-                    tail_dx, tail_dy = -dx, -dy
-                else:  # facing up (3)
-                    tail_dx, tail_dy = dy, -dx
+                # Project onto forward and right vectors
+                # Forward vector: DIRS[direction]
+                # Right vector: DIRS[(direction + 1) % 4]
+                fx, fy = DIRS[self.direction]
+                rx, ry = DIRS[(self.direction + 1) % 4]
+                
+                # Forward component (positive = ahead, negative = behind)
+                tail_fwd = dx * fx + dy * fy
+                # Right component (positive = right, negative = left)
+                tail_right = dx * rx + dy * ry
                 
                 # Normalize to roughly [-1, 1] range
                 max_coord = self.config.grid_size - 1
-                tail_dx = tail_dx / max_coord if max_coord > 0 else 0.0
-                tail_dy = tail_dy / max_coord if max_coord > 0 else 0.0
+                tail_dx = tail_fwd / max_coord if max_coord > 0 else 0.0
+                tail_dy = tail_right / max_coord if max_coord > 0 else 0.0
             else:
                 tail_dx = tail_dy = 0.0
 

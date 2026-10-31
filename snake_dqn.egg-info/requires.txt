@@ -1,0 +1,14 @@
+streamlit>=1.51.0
+torch<3,>=2.9
+numpy>=1.24.0
+plotly>=5.15.0
+altair>=5.0.0
+pandas>=2.0.0
+gymnasium>=0.28.0
+pillow>=10.0.0
+
+[dev]
+pytest>=7.4.0
+pytest-cov>=4.1.0
+ruff>=0.3.0
+mypy>=1.8.0

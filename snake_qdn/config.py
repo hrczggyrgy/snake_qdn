@@ -8,11 +8,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-@dataclass
+# Single source of truth for observation dimension
+OBS_DIM = 17
+
+
+@dataclass(frozen=True)
 class EnvConfig:
     """Validated environment configuration."""
 
-    grid_size: int = 20
+    grid_size: int = 8  # Start with curriculum stage 0
     step_penalty: float = -0.01
     food_reward: float = 10.0
     death_penalty: float = -10.0
@@ -24,33 +28,6 @@ class EnvConfig:
     curriculum_enabled: bool = True
     curriculum_stages: list[int] = field(default_factory=lambda: [8, 12, 20])
     curriculum_threshold: float = 10.0  # Rolling avg score to advance
-
-    def __init__(
-        self,
-        grid_size: int = 20,
-        step_penalty: float = -0.01,
-        food_reward: float = 10.0,
-        death_penalty: float = -10.0,
-        render_mode: str | None = "rgb_array",
-        seed: int | None = None,
-        allow_tail_entry: bool = True,
-        shaping_coef: float = 0.1,
-        curriculum_enabled: bool = True,
-        curriculum_stages: list[int] | None = None,
-        curriculum_threshold: float = 10.0,
-    ):
-        self.grid_size = grid_size
-        self.step_penalty = step_penalty
-        self.food_reward = food_reward
-        self.death_penalty = death_penalty
-        self.render_mode = render_mode
-        self.seed = seed
-        self.allow_tail_entry = allow_tail_entry
-        self.shaping_coef = shaping_coef
-        self.curriculum_enabled = curriculum_enabled
-        self.curriculum_stages = curriculum_stages or [8, 12, 20]
-        self.curriculum_threshold = curriculum_threshold
-        self.__post_init__()
 
     def __post_init__(self):
         if self.grid_size < 3:
@@ -67,26 +44,14 @@ class EnvConfig:
             raise ValueError("All curriculum stages must be >= 3")
 
 
+@dataclass(frozen=True)
 class NetworkConfig:
     """Neural network architecture configuration."""
 
-    input_size: int = 17  # Extended observation (17D)
+    input_size: int = OBS_DIM
     hidden_size: int = 64  # Shrunk from 256
     output_size: int = 3
     dropout: float = 0.0  # Removed dropout (anti-pattern in DQN)
-
-    def __init__(
-        self,
-        input_size: int = 17,
-        hidden_size: int = 64,
-        output_size: int = 3,
-        dropout: float = 0.0,
-    ):
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.output_size = output_size
-        self.dropout = dropout
-        self.__post_init__()
 
     def __post_init__(self):
         if self.hidden_size <= 0:

@@ -402,7 +402,23 @@ class TrainingController:
     # -------------------------------------------------------------------------
 
     def _create_env(self) -> SnakeEnv:
-        return SnakeEnv(config=self.env_config)
+        # Use the current curriculum stage grid size, not the base config
+        if self.env_config.curriculum_enabled:
+            stage_grid_size = self.env_config.curriculum_stages[self._curriculum_stage_idx]
+            config = EnvConfig(
+                grid_size=stage_grid_size,
+                step_penalty=self.env_config.step_penalty,
+                food_reward=self.env_config.food_reward,
+                death_penalty=self.env_config.death_penalty,
+                render_mode=self.env_config.render_mode,
+                seed=self.env_config.seed,
+                allow_tail_entry=self.env_config.allow_tail_entry,
+                shaping_coef=self.env_config.shaping_coef,
+                curriculum_enabled=False,  # Disable curriculum in the env itself
+            )
+        else:
+            config = self.env_config
+        return SnakeEnv(config=config)
 
     def _create_agent(self) -> Agent:
         return Agent(config=self.agent_config)
@@ -464,6 +480,10 @@ class TrainingController:
             "last_transition_time": None,
             "_prev_optimizer_step": 0,
         }
+        # Per-stage score window for curriculum
+        from collections import deque
+        self._stage_scores = deque(maxlen=50)
+        self._min_stage_episodes = 30
 
     def new_run(self) -> None:
         """Create fresh agent and replay buffer, discard current model."""
@@ -521,11 +541,17 @@ class TrainingController:
         if agent is None:
             return False
 
-        # Check rolling average score
-        if not agent.mean_scores_history:
+        # Initialize per-stage score window if needed
+        if not hasattr(self, '_stage_scores'):
+            from collections import deque
+            self._stage_scores = deque(maxlen=50)
+            self._min_stage_episodes = 30  # Minimum episodes before advance
+
+        # Check rolling average score within current stage
+        if len(self._stage_scores) < self._min_stage_episodes:
             return False
 
-        current_avg = agent.mean_scores_history[-1]
+        current_avg = sum(self._stage_scores) / len(self._stage_scores)
         threshold = self.env_config.curriculum_threshold
         stages = self.env_config.curriculum_stages
 
@@ -533,9 +559,10 @@ class TrainingController:
             # Advance to next stage
             self._curriculum_stage_idx += 1
             new_grid_size = stages[self._curriculum_stage_idx]
-            self.env.set_grid_size(new_grid_size)
-            self.env_config.grid_size = new_grid_size
+            # Recreate env with new grid size (doesn't mutate shared config)
+            self._env = self._create_env()
             self._reset_episode()
+            self._stage_scores.clear()  # Reset score window for new stage
             self._emit_event(
                 EventType.CURRICULUM_ADVANCE,
                 f"Curriculum advanced to {new_grid_size}×{new_grid_size} (avg score: {current_avg:.1f})",
@@ -945,6 +972,14 @@ class TrainingController:
         self._action = None
         self._selection_reason = None
         self._step_id = 0
+
+        # Record score for curriculum stage window
+        if hasattr(self, '_stage_scores'):
+            self._stage_scores.append(info["score"])
+
+        # Clear n-step buffer on episode boundary
+        if self._agent is not None:
+            self._agent.memory._n_step_buffer.clear()
 
         if self._agent is not None:
             self._q_values = self._agent.get_q_values(obs)
