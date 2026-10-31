@@ -6,20 +6,18 @@ Each experiment runs with a fixed total budget (environment transitions, wall-cl
 or optimizer steps) to enable fair comparison.
 """
 
-import time
 import json
+import time
 import uuid
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable
 
 import numpy as np
 import torch
 
 from agent import Agent
 from snake_env import SnakeGameAI
-from training import TrainingController, ActivityMode, AgentConfig, EnvConfig
+from training import ActivityMode, AgentConfig, EnvConfig, TrainingController
 
 
 @dataclass
@@ -68,7 +66,7 @@ class EvaluationRecord:
     cutoff_reason: str = "completed"
     requested_episodes: int = 0
     total_steps: int = 0
-    
+
     @property
     def completed_episodes(self) -> int:
         """Number of episodes completed in this evaluation."""
@@ -127,32 +125,32 @@ class ExperimentResult:
     # Status
     completed: bool = True
     stopped_reason: str = "budget_exhausted"
-    
+
     # Backward compatibility properties
     @property
     def eval_scores(self) -> list[float]:
         """Backward compat: list of periodic evaluation means."""
         return [e.mean_score for e in self.evaluation_history]
-    
+
     @property
     def eval_mean(self) -> float:
         """Backward compat: mean of periodic evaluation means."""
         if not self.evaluation_history:
             return 0.0
         return np.mean([e.mean_score for e in self.evaluation_history])
-    
+
     @property
     def eval_std(self) -> float:
         """Backward compat: std of periodic evaluation means."""
         if not self.evaluation_history:
             return 0.0
         return np.std([e.mean_score for e in self.evaluation_history])
-    
+
     @property
     def final_eval_mean(self) -> float:
         """Backward compat: final evaluation mean."""
         return self.final_evaluation.mean_score if self.final_evaluation else 0.0
-    
+
     @property
     def final_eval_std(self) -> float:
         """Backward compat: final evaluation std."""
@@ -163,12 +161,12 @@ class _DeadlineChecker:
     """Checks if a deadline has been exceeded."""
     def __init__(self, deadline: float | None = None):
         self.deadline = deadline
-    
+
     def is_exceeded(self) -> bool:
         if self.deadline is None:
             return False
         return time.monotonic() >= self.deadline
-    
+
     def remaining(self) -> float | None:
         if self.deadline is None:
             return None
@@ -184,24 +182,24 @@ class ExperimentRunner:
 
     def _derive_seeds(self, base_seed: int, n_training: int = 1, n_eval_episodes: int = 10) -> tuple[int, list[int]]:
         """Derive training and evaluation seeds from base experiment seed.
-        
+
         Uses a deterministic derivation so the same base seed always produces
         the same training seed and evaluation seed list.
         """
         # Create a local RNG from the base seed
         rng = np.random.default_rng(base_seed)
-        
+
         # Training environment seed
         train_seed = int(rng.integers(0, 2**31 - 1))
-        
+
         # Evaluation episode seeds (for reproducible final evaluation)
         eval_seeds = [int(rng.integers(0, 2**31 - 1)) for _ in range(n_eval_episodes)]
-        
+
         return train_seed, eval_seeds
 
     def _derive_periodic_seeds(self, base_seed: int, max_evaluations: int, episodes_per_eval: int) -> list[list[int]]:
         """Derive seed panels for all periodic evaluations.
-        
+
         Each evaluation gets a fixed panel of episode seeds.
         """
         rng = np.random.default_rng(base_seed)
@@ -225,7 +223,7 @@ class ExperimentRunner:
     ) -> tuple[EvaluationRecord, str]:
         """
         Evaluate a policy in isolation without affecting training state.
-        
+
         Args:
             agent: The agent to evaluate (uses greedy policy)
             env_config: Environment configuration
@@ -234,7 +232,7 @@ class ExperimentRunner:
             episode_seeds: List of seeds for each episode (must be provided for reproducibility)
             deadline: Optional wall-clock deadline (monotonic time). If exceeded, evaluation stops.
             max_total_steps: Optional maximum total evaluation steps across all episodes. If exceeded, evaluation stops.
-        
+
         Returns:
             Tuple of (EvaluationRecord, cutoff_reason)
         """
@@ -248,30 +246,30 @@ class ExperimentRunner:
             raise ValueError("max_steps_per_episode must be positive")
         if max_total_steps is not None and max_total_steps <= 0:
             raise ValueError("max_total_steps must be positive")
-        
+
         deadline_checker = _DeadlineChecker(deadline)
-        
+
         # Step budget checker (similar to deadline checker)
         class _StepBudgetChecker:
             def __init__(self, max_steps: int | None):
                 self.max_steps = max_steps
                 self.steps = 0
-            
+
             def is_exceeded(self) -> bool:
                 if self.max_steps is None:
                     return False
                 return self.steps >= self.max_steps
-            
+
             def increment(self) -> None:
                 self.steps += 1
-            
+
             def remaining(self) -> int | None:
                 if self.max_steps is None:
                     return None
                 return max(0, self.max_steps - self.max_steps)
-        
+
         step_budget_checker = _StepBudgetChecker(max_total_steps)
-        
+
         # Create evaluation environment (no rendering)
         eval_env = SnakeGameAI(
             grid_size=env_config.grid_size,
@@ -281,51 +279,51 @@ class ExperimentRunner:
             render_mode=None,  # No rendering for evaluation
             seed=None,  # We'll seed each episode explicitly
         )
-        
+
         # Save model mode and set to eval
         was_training = agent.model.training
         agent.model.eval()
-        
+
         scores = []
         used_seeds = []
         horizon_cutoff_count = 0
         cutoff_reason = "completed"
         eval_start = time.monotonic()
         total_steps = 0
-        
+
         try:
             for i in range(n_episodes):
                 if deadline_checker.is_exceeded():
                     cutoff_reason = "deadline_exceeded"
                     break
-                
+
                 # Seed this episode's environment
                 ep_seed = episode_seeds[i]
                 eval_env.seed(ep_seed)
-                
+
                 state, _ = eval_env.reset()
                 done = False
                 steps = 0
-                
+
                 while not done and steps < max_steps_per_episode:
                     if deadline_checker.is_exceeded():
                         cutoff_reason = "deadline_exceeded"
                         break
-                    
+
                     if step_budget_checker.is_exceeded():
                         cutoff_reason = "step_budget_exceeded"
                         break
-                    
+
                     action = agent.get_action(state, training=False)
                     state, reward, terminated, truncated, info = eval_env.step(action)
                     done = terminated or truncated
                     steps += 1
                     total_steps += 1
                     step_budget_checker.increment()
-                
+
                 if cutoff_reason in ("deadline_exceeded", "step_budget_exceeded"):
                     break
-                
+
                 # Episode completed (either terminated, truncated, or horizon reached)
                 if terminated or truncated:
                     # Actual episode completion
@@ -336,7 +334,7 @@ class ExperimentRunner:
                     scores.append(info["score"])
                     used_seeds.append(episode_seeds[i])
                     horizon_cutoff_count += 1
-            
+
         except KeyboardInterrupt:
             cutoff_reason = "interrupted"
             raise
@@ -347,16 +345,16 @@ class ExperimentRunner:
             # Always restore model mode and close environment
             agent.model.train(was_training)
             eval_env.close()
-        
+
         eval_time = time.monotonic() - eval_start
-        completed_episodes = len(scores)
-        
+        _ = len(scores)  # completed_episodes (unused but kept for clarity)
+
         # Determine final cutoff reason
         if cutoff_reason == "completed" and n_episodes > len(scores):
             cutoff_reason = "horizon_cutoff"
         elif cutoff_reason == "completed" and horizon_cutoff_count > 0:
             cutoff_reason = "horizon_cutoff"
-        
+
         return EvaluationRecord(
             training_transition=0,  # Set by caller
             episode_seeds=used_seeds,
@@ -397,7 +395,7 @@ class ExperimentRunner:
 
         # Derive seeds for training and evaluation
         train_seed, final_eval_seeds = self._derive_seeds(config.seed, n_eval_episodes=eval_episodes * 2)
-        
+
         # Apply seed for reproducibility (global RNGs)
         self._apply_seed(config.seed)
 
@@ -411,7 +409,7 @@ class ExperimentRunner:
             render_mode=env_config.render_mode,
             seed=train_seed,
         )
-        
+
         controller = TrainingController(
             env_config=env_config,
             agent_config=config.agent_config,
@@ -423,7 +421,7 @@ class ExperimentRunner:
         evaluation_history: list[EvaluationRecord] = []
         metrics = controller.get_metrics()
         last_eval_transition = metrics.get("training_transitions", 0)
-        
+
         # Calculate maximum number of periodic evaluations possible (for seed allocation)
         # Only allocate seeds if eval_every > 0
         periodic_seed_panels = []
@@ -435,20 +433,20 @@ class ExperimentRunner:
                 config.seed + 1, max_evaluations, eval_episodes
             )
             panel_idx = 0
-        
+
         # Reserve capacity for final evaluation (minimum guaranteed, capped by total budget)
         total_budget = config.budget.max_env_transitions or 1_000_000
         # Final evaluation: eval_episodes * 2 episodes, fixed horizon of 100 steps/episode
         # Cap reserve by total budget to allow some training on small budgets
         final_eval_transition_budget = min(eval_episodes * 2 * 100, 2000, total_budget)
-        
+
         # Reserve capacity for periodic evaluations (what's left after final eval reserve)
         # Give periodic evaluations more budget - they run more frequently
         periodic_eval_budget = max(0, (config.budget.max_env_transitions or 1_000_000) - final_eval_transition_budget)
-        
+
         # Track transitions used for evaluation
         eval_transitions_used = 0
-        
+
         # Calculate wall-clock deadlines (if wall time budget is set)
         start_time = time.monotonic()
         total_deadline = None
@@ -459,7 +457,7 @@ class ExperimentRunner:
             # Reserve time for final evaluation: min(30s, 10% of total budget)
             final_eval_time_reserve = min(30.0, config.budget.max_wall_time_seconds * 0.1)
             training_deadline = total_deadline - final_eval_time_reserve
-        
+
         # Main training loop
         try:
             controller.restart_board()  # Start first episode
@@ -489,7 +487,7 @@ class ExperimentRunner:
                     if training_done >= min_training_budget and remaining_for_final <= required_final_budget:
                         stopped_reason = "budget_exhausted"
                         break
-                
+
                 # Check wall-clock budget using training deadline (reserves time for final evaluation)
                 if config.budget.max_wall_time_seconds is not None:
                     current_time = time.monotonic()
@@ -499,7 +497,7 @@ class ExperimentRunner:
                     wall_time = current_time - start_time
                 else:
                     wall_time = time.monotonic() - start_time
-                
+
                 if config.budget.is_exhausted(total_transitions, wall_time, optimizer_steps, episodes):
                     stopped_reason = "budget_exhausted"
                     break
@@ -522,7 +520,7 @@ class ExperimentRunner:
                 if eval_every > 0 and training_transitions - last_eval_transition >= eval_every:
                     if verbose:
                         print(f"  Running evaluation at training transition {training_transitions}...")
-                    
+
                     eval_start = time.monotonic()
                     # Get seeds for this periodic evaluation
                     if panel_idx >= len(periodic_seed_panels):
@@ -531,10 +529,10 @@ class ExperimentRunner:
                             config.seed + 2 + panel_idx, 10, eval_episodes
                         )
                         periodic_seed_panels.extend(extra_panels)
-                    
+
                     ep_seeds = periodic_seed_panels[panel_idx]
                     panel_idx += 1
-                    
+
                     # Calculate evaluation budget for periodic evaluation
                     # env_transitions only includes training; add eval_transitions_used for total
                     # Use fixed horizon of 100 steps/episode
@@ -550,11 +548,11 @@ class ExperimentRunner:
                         # Protect final eval reserve: periodic eval can only use (remaining - final_reserve)
                         protected_remaining = max(0, remaining_for_final - final_eval_transition_budget)
                         eval_budget = min(eval_budget, protected_remaining)
-                    
+
                     # Skip periodic evaluation if no budget remains
                     if eval_budget <= 0:
                         if verbose:
-                            print(f"  Skipping periodic evaluation: no transition budget remaining")
+                            print("  Skipping periodic evaluation: no transition budget remaining")
                         last_eval_transition = training_transitions
                     else:
                         # Check remaining wall time budget for evaluation
@@ -566,7 +564,7 @@ class ExperimentRunner:
                             # Skip if less than 1 second remaining
                             if remaining_time < 1.0:
                                 if verbose:
-                                    print(f"  Skipping periodic evaluation: insufficient wall time budget (reserving for final)")
+                                    print("  Skipping periodic evaluation: insufficient wall time budget (reserving for final)")
                                 last_eval_transition = training_transitions
                             else:
                                 eval_record, cutoff_reason = self.evaluate_policy(
@@ -582,7 +580,7 @@ class ExperimentRunner:
                                 evaluation_history.append(eval_record)
                                 last_eval_transition = training_transitions
                                 eval_transitions_used += eval_record.total_steps
-                                
+
                                 if cutoff_reason != "completed":
                                     if verbose:
                                         print(f"  Periodic evaluation cutoff: {cutoff_reason}")
@@ -593,7 +591,7 @@ class ExperimentRunner:
                             # No wall time budget - use the already-calculated eval_budget
                             if eval_budget <= 0:
                                 if verbose:
-                                    print(f"  Skipping periodic evaluation: no transition budget remaining")
+                                    print("  Skipping periodic evaluation: no transition budget remaining")
                                 last_eval_transition = training_transitions
                             else:
                                 eval_record, cutoff_reason = self.evaluate_policy(
@@ -619,25 +617,25 @@ class ExperimentRunner:
 
         # Calculate overhead time so far (setup time)
         overhead_time = time.monotonic() - overhead_start
-        
+
         # Final evaluation
         final_eval_time = 0.0
         final_evaluation = None
         if stopped_reason in ("budget_exhausted", "interrupted", "error"):
             if verbose:
-                print(f"  Running final evaluation...")
-            
+                print("  Running final evaluation...")
+
             eval_start = time.monotonic()
             # Check remaining wall time
             remaining_time = None
             if config.budget.max_wall_time_seconds is not None:
                 elapsed = time.monotonic() - start_time
                 remaining_time = config.budget.max_wall_time_seconds - elapsed
-            
+
             # Get current env_transitions for final evaluation budget calculation
             metrics = controller.get_metrics()
             env_transitions = metrics.get("env_transitions", 0)
-            
+
             # Calculate final evaluation budget based on remaining budget
             # env_transitions only includes training; add eval_transitions_used for total
             # Use fixed horizon of 100 steps/episode
@@ -647,11 +645,11 @@ class ExperimentRunner:
                 remaining_for_final = max(0, config.budget.max_env_transitions - total_transitions)
                 # Cap final eval budget to remaining budget
                 final_eval_budget = min(final_eval_budget, remaining_for_final)
-            
+
             # Handle zero/negative final budget explicitly (budget exhaustion, not error)
             if final_eval_budget <= 0:
                 if verbose:
-                    print(f"  Skipping final evaluation: no transition budget remaining")
+                    print("  Skipping final evaluation: no transition budget remaining")
                 final_evaluation = FinalEvaluation(
                     episode_seeds=[],
                     episode_scores=[],
@@ -686,7 +684,7 @@ class ExperimentRunner:
                     eval_transitions_used += final_eval_record.total_steps
                 except Exception:
                     if verbose:
-                        print(f"  Final evaluation failed: cutoff")
+                        print("  Final evaluation failed: cutoff")
                     final_evaluation = FinalEvaluation(
                         episode_seeds=[],
                         episode_scores=[],
@@ -698,7 +696,7 @@ class ExperimentRunner:
                         total_steps=0,
                     )
             final_eval_time = time.monotonic() - eval_start
-            
+
             if verbose:
                 print(f"  Final eval: {final_evaluation.mean_score:.2f} ± {final_evaluation.std_score:.2f} "
                       f"(time: {final_eval_time:.2f}s, completed: {final_evaluation.completed_episodes}, reason: {final_evaluation.cutoff_reason})")
@@ -709,9 +707,8 @@ class ExperimentRunner:
         # Collect results
         agent = controller.agent
         metrics = controller.get_metrics()
-        
+
         # Calculate explicit timing breakdown
-        total_eval_time = sum(e.eval_time for e in evaluation_history) + (final_evaluation.eval_time if final_evaluation else 0.0)
         controller_time = metrics.get("total_session_time", 0.0)
         # Training time = controller session time - periodic evaluation time (not final eval)
         # Controller session time includes periodic eval time since they run inline
@@ -772,11 +769,10 @@ class ExperimentRunner:
 
         controller.close()
         return result
-    
+
     def _apply_seed(self, seed: int) -> None:
         """Apply seed to all random number generators."""
         import random
-        import torch
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
@@ -806,30 +802,30 @@ class ExperimentRunner:
         for filepath in self.output_dir.glob(pattern):
             with open(filepath) as f:
                 data = json.load(f)
-            
+
             # Handle versioned envelope format
             if "schema_version" in data and "result" in data:
                 result_data = data["result"]
             else:
                 # Legacy flat format (backward compatibility)
                 result_data = data
-            
+
             # Reconstruct nested dataclasses
             if "evaluation_history" in result_data:
                 result_data["evaluation_history"] = [
                     EvaluationRecord(**e) if isinstance(e, dict) else e
                     for e in result_data["evaluation_history"]
                 ]
-            
+
             if "final_evaluation" in result_data and result_data["final_evaluation"]:
                 fe = result_data["final_evaluation"]
                 if isinstance(fe, dict):
                     result_data["final_evaluation"] = FinalEvaluation(**fe)
-            
+
             # Filter out unexpected fields (e.g., "config" from legacy saves)
             result_fields = {f.name for f in ExperimentResult.__dataclass_fields__.values()}
             filtered_data = {k: v for k, v in result_data.items() if k in result_fields}
-            
+
             results.append(ExperimentResult(**filtered_data))
         return results
 

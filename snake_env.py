@@ -172,7 +172,7 @@ class SnakeGameAI:
         # Rebuild empty cells if snake was manually modified (fallback for tests)
         if not hasattr(self, '_empty_cells') or len(self._empty_cells) + len(self.snake) != self.grid_size * self.grid_size:
             self._rebuild_empty_cells()
-        
+
         if self._empty_cells:
             self.food = self._rng.choice(self._empty_cells)
             # Remove food position from empty cells
@@ -237,7 +237,7 @@ class SnakeGameAI:
             # Allow entering the tail cell if it will move away (snake not growing)
             tail = self.snake[-1]
             will_grow = (self.food is not None and new_head == self.food)
-            
+
             if self.allow_tail_entry and new_head == tail and not will_grow:
                 # Tail entry allowed - treat as valid move
                 pass
@@ -303,6 +303,7 @@ class SnakeGameAI:
         # action == 0: keep current direction
 
     def _get_observation(self) -> np.ndarray:
+        """Return 22-dimensional observation vector as float32 array."""
         hx, hy = self.snake[0]
         n = self.grid_size
         scale = n - 1
@@ -374,19 +375,19 @@ class SnakeGameAI:
                 for action in range(3)
             ]
 
-        obs = np.asarray(
+        obs_list = (
             dangers
             + direction_flags
             + food_flags
             + [food_dx, food_dy]
             + wall_distances
             + [length_fraction, timeout_progress]
-            + reachable_space,
-            dtype=np.float32,
+            + reachable_space
         )
+        obs = np.array(obs_list, dtype=np.float32)
 
         assert obs.shape == self.observation_space_shape
-        return obs
+        return obs  # type: ignore[no-any-return]
 
     def _reachable_space_after_action(self, action: int) -> float:
         """Compute reachable space fraction after taking an action.

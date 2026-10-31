@@ -14,11 +14,12 @@ from typing import Any
 import numpy as np
 import torch
 
+from observation_schema import OBSERVATION_SCHEMA_VERSION
+
 # Checkpoint schema version
 CHECKPOINT_VERSION = 3
 
 # Observation/reward schema version for compatibility checking
-from observation_schema import OBSERVATION_SCHEMA_VERSION
 REWARD_SCHEMA_VERSION = 1
 
 
@@ -70,7 +71,7 @@ class TrainingState:
     mean_scores_history: list
     epsilon_history: list
     loss_history: list
-    memory: list  # Replay buffer contents
+    memory: list | dict  # Replay buffer contents (list for old format, dict for new format)
     memory_position: int
     rng_state_python: Any
     rng_state_numpy: Any
@@ -369,6 +370,7 @@ class CheckpointManager:
         rng_python, rng_numpy, rng_torch, rng_cuda = capture_rng_state()
 
         # Capture replay buffer exactly (preserve physical layout, size, and position)
+        memory_data: dict[str, Any] | list[tuple[Any, ...]]
         if hasattr(self.agent.memory, 'states'):
             # New compact ReplayMemory - save exact state
             memory_data = {
@@ -558,7 +560,7 @@ class CheckpointManager:
                 size = memory_data.get('size', 0)
                 position = memory_data.get('position', 0)
                 capacity = memory_data.get('capacity', self.agent.memory.capacity)
-                
+
                 # Validate capacity matches
                 if capacity != self.agent.memory.capacity:
                     raise ValueError(
@@ -566,10 +568,10 @@ class CheckpointManager:
                         f"current agent has {self.agent.memory.capacity}. "
                         "Cannot resume with different replay buffer capacity."
                     )
-                
+
                 self.agent.memory.size = min(size, self.agent.memory.capacity)
                 self.agent.memory.position = position % self.agent.memory.capacity
-                
+
                 # Restore arrays up to the saved size
                 for field in ['states', 'actions', 'rewards', 'next_states', 'terminated', 'truncated']:
                     if field in memory_data:
@@ -580,7 +582,7 @@ class CheckpointManager:
                 size = min(len(memory_data), self.agent.memory.capacity)
                 self.agent.memory.size = size
                 self.agent.memory.position = training_state.memory_position % self.agent.memory.capacity
-                
+
                 for i, transition in enumerate(memory_data[:size]):
                     state, action, reward, next_state, terminated, truncated = transition
                     self.agent.memory.states[i] = state
@@ -616,14 +618,14 @@ class CheckpointManager:
             env.game_over = env_state.game_over
             if env_state.rng_state_python is not None:
                 restore_env_rng_state(env, env_state.rng_state_python, env_state.rng_state_numpy)
-            
+
             # Restore empty cells cache from saved state (not rebuild)
             if hasattr(env_state, '_empty_cells') and env_state._empty_cells is not None:
                 env._empty_cells = env_state._empty_cells
             else:
                 # Fallback: rebuild if not saved
                 env._rebuild_empty_cells()
-            
+
             # Validate environment settings match (raise if strict, warn otherwise)
             if env.grid_size != training_state.env_grid_size:
                 msg = f"env grid_size mismatch: checkpoint={training_state.env_grid_size}, current={env.grid_size}"
@@ -691,7 +693,7 @@ class CheckpointManager:
                     f"checkpoint has {saved}, current agent has {current}. "
                     "Use import_weights_only() for transfer learning."
                 )
-        
+
         # Check integer hyperparameters exactly
         if self.agent.epsilon_decay_steps != training_state.epsilon_decay_steps:
             raise ValueError(
@@ -716,16 +718,16 @@ class CheckpointManager:
 
     def import_weights_only(self, filepath: str) -> ModelConfig:
         """Load only model weights for transfer learning or inference.
-        
+
         Does NOT restore optimizer state, replay buffer, epsilon, or training state.
         Use this for transfer learning or inference when you don't need exact resume.
-        
+
         Args:
             filepath: Path to checkpoint file
-            
+
         Returns:
             ModelConfig of the loaded checkpoint
-            
+
         Raises:
             ValueError: If architecture mismatch
             FileNotFoundError: If checkpoint file doesn't exist

@@ -49,25 +49,25 @@ def render_primary_toolbar(controller: TrainingController) -> None:
         with policy_col:
             if controller.mode != ActivityMode.MANUAL:
                 # Internal policy values (must match TrainingController.advance_tick expectations)
-                POLICY_VALUES = ["Watch", "FastTraining"]
+                policy_values = ["Watch", "FastTraining"]
                 # Display labels for UI
-                POLICY_LABELS = ["Watch", "Train fast"]
-                
+                policy_labels = ["Watch", "Train fast"]
+
                 current_policy = st.session_state.get("execution_policy", "Watch")
                 try:
-                    policy_index = POLICY_VALUES.index(current_policy)
+                    policy_index = policy_values.index(current_policy)
                 except ValueError:
                     policy_index = 0
 
                 new_policy = st.selectbox(
                     "Execution",
-                    POLICY_LABELS,
+                    policy_labels,
                     index=policy_index,
                     key="toolbar_policy",
                     help="Watch: Deliberately paced, readable movement\nTrain fast: Multiple transitions per UI update",
                 )
                 # Map display label back to internal value
-                st.session_state.execution_policy = POLICY_VALUES[POLICY_LABELS.index(new_policy)]
+                st.session_state.execution_policy = policy_values[policy_labels.index(new_policy)]
             else:
                 st.selectbox("Execution", ["Manual"], disabled=True, key="toolbar_policy_manual")
 

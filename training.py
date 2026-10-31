@@ -17,8 +17,8 @@ from typing import Any
 import numpy as np
 
 from agent import Agent
-from snake_env import SnakeGameAI
 from observation_schema import OBSERVATION_SIZE
+from snake_env import SnakeGameAI
 
 # Module logger
 logger = logging.getLogger(__name__)
@@ -81,7 +81,7 @@ class ActivityMode(Enum):
 @dataclass(frozen=True)
 class DecisionRecord:
     """Record of a single decision for educational/debugging purposes.
-    
+
     Captures the complete context of a decision including the model state,
     observation, Q-values, action taken, and reasoning.
     """
@@ -817,24 +817,25 @@ class TrainingController:
             # Store transition (terminated controls bootstrap, truncated stored separately)
             assert self._observation is not None, "Observation should be set before training"
             self._agent.remember(self._observation, action, reward, next_obs, terminated, truncated)
-            
+
             # Track training transitions (one per stored transition, not per gradient step)
             self._metrics["training_transitions"] = (
                 self._metrics.get("training_transitions") or 0
             ) + 1
-            
+
             # Update step-based epsilon decay immediately after storing transition
             if self._agent.epsilon_decay_steps > 0:
+                training_transitions = int(self._metrics.get("training_transitions", 0) or 0)
                 self._agent.decay_epsilon_by_steps(
-                    self._metrics["training_transitions"],
+                    training_transitions,
                     self._agent.epsilon_decay_steps
                 )
-            
+
             # Check replay readiness before optimization
             replay_ready = self._agent.memory.is_ready(self._agent.batch_size)
             self._metrics["replay_buffer_size"] = len(self._agent.memory)
             self._metrics["replay_active"] = replay_ready
-            
+
             # Emit REPLAY_ACTIVE event once when replay becomes ready
             if replay_ready and not self._replay_warmed_up:
                 self._replay_warmed_up = True
@@ -842,7 +843,7 @@ class TrainingController:
                     EventType.REPLAY_ACTIVE,
                     "Replay buffer ready — replay training active",
                 )
-            
+
             # Capture Bellman details periodically (every 10 training steps when replay is ready)
             # Skip during FastTraining bursts to avoid overhead; UI only shows last snapshot
             is_fast_training = (
@@ -852,10 +853,10 @@ class TrainingController:
             )
             capture_bellman = (
                 not is_fast_training
-                and (self._metrics.get("training_transitions", 0) % 10 == 0)
+                and (int(self._metrics.get("training_transitions", 0) or 0) % 10 == 0)
                 and replay_ready
             )
-            
+
             t_opt_start = time.monotonic()
             optimizer_steps_before = self._agent.trainer.training_step
             # Unified optimization step (replaces dual-update loop)
@@ -1033,6 +1034,7 @@ class TrainingController:
 
                 # After burst, compute diagnostics for the final state (for UI snapshot)
                 if steps_executed > 0 and not self._game_over and self._agent is not None:
+                    assert self._observation is not None, "Observation should be set when game is not over"
                     t_diag_start = time.monotonic()
                     self._q_values = self._agent.get_q_values(self._observation)
                     self._action_probs = self.agent.trainer.probabilities_from_q_values(self._q_values)
@@ -1090,8 +1092,8 @@ class TrainingController:
         assert self._observation is not None
 
         # During fast training, skip Q-value computation for exploration steps
-        compute_q = not (self._mode == ActivityMode.TRAIN and 
-                         hasattr(self, '_execution_policy') and 
+        compute_q = not (self._mode == ActivityMode.TRAIN and
+                         hasattr(self, '_execution_policy') and
                          self._execution_policy == "FastTraining")
 
         if self._mode == ActivityMode.TRAIN:

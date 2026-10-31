@@ -8,17 +8,15 @@ Each function returns a Plotly Figure ready for st.plotly_chart().
 import numpy as np
 import plotly.graph_objects as go
 
+from observation_schema import OBSERVATION_FEATURES
 from ui.styles import (
     ACTION_NAMES,
     CHART_HEIGHT_MAIN,
     CHART_HEIGHT_NETWORK,
     CHART_HEIGHT_QVALUES,
     CHART_HEIGHT_SMALL,
-    CHART_HEIGHT_STATE,
-    STATE_LABELS_FLAT,
     get_plotly_template,
 )
-from observation_schema import OBSERVATION_FEATURES
 
 
 def apply_template(fig: go.Figure, height: int | None = None, uirevision: str | None = None):
@@ -375,7 +373,7 @@ def render_state_vector(observation: np.ndarray | None) -> go.Figure | None:
     if len(observation) != len(labels):
         raise ValueError("Observation and feature-label counts differ")
 
-    # Color by group: Danger=red, Direction=blue, Food=gold, 
+    # Color by group: Danger=red, Direction=blue, Food=gold,
     # Food displacement=orange, Wall=purple, Length/timeout=green, Space=teal
     colors = []
     for i, val in enumerate(observation):
@@ -836,7 +834,7 @@ def render_termination_summary(
         annotation_text = f"{completed} of {window} episodes available"
     else:
         annotation_text = f"Showing last {window} episodes"
-    
+
     fig.update_layout(
         title={
             "text": f"Episode Outcomes ({source_label})",
@@ -965,7 +963,7 @@ def render_bellman_update(details: dict | None) -> go.Figure | None:
     reward = details.get("reward", 0.0)
     next_state = details.get("next_state", np.zeros(11))
     terminated = details.get("terminated", False)
-    current_q = details.get("current_q", np.zeros(3))
+    details.get("current_q", np.zeros(3))
     current_q_taken = details.get("current_q_taken", 0.0)
     target_q = details.get("target_q", 0.0)
     td_error = details.get("td_error", 0.0)
@@ -989,12 +987,12 @@ def render_bellman_update(details: dict | None) -> go.Figure | None:
     # Equation display as annotations
     terminated_str = "1" if terminated else "0"
     equation_lines = [
-        f"Bellman Target: y = r + γ(1-d) max_a' Q'(s',a')",
+        "Bellman Target: y = r + γ(1-d) max_a' Q'(s',a')",
         f"                = {reward:.3f} + {gamma:.3f}(1-{terminated_str}) × {target_q_max:.3f}",
         f"                = {target_q:.3f}",
-        f"",
+        "",
         f"Online Q(s,a): Q(s,a) = {current_q_taken:.3f}",
-        f"",
+        "",
         f"TD Error: δ = y - Q(s,a) = {target_q:.3f} - {current_q_taken:.3f} = {td_error:.3f}",
     ]
 

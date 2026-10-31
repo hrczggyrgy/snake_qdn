@@ -154,8 +154,8 @@ def test_state_vector_margins_sufficient_for_labels():
     """State vector chart should have sufficient left margin for 22 labels."""
     import numpy as np
 
-    from ui.charts import render_state_vector
     from observation_schema import OBSERVATION_SIZE
+    from ui.charts import render_state_vector
 
     obs = np.ones(OBSERVATION_SIZE, dtype=np.float32)
     fig = render_state_vector(obs)

@@ -10,8 +10,8 @@ import pytest
 import torch
 
 from agent import Agent, ReplayMemory
-from snake_env import SnakeGameAI
 from observation_schema import OBSERVATION_SIZE
+from snake_env import SnakeGameAI
 
 
 class TestReplayMemory:

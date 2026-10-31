@@ -1,9 +1,10 @@
 """Pytest configuration and fixtures for Snake DQN tests."""
 
 import random
+
 import numpy as np
-import torch
 import pytest
+import torch
 
 
 @pytest.fixture(autouse=True)

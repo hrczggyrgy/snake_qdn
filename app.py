@@ -188,7 +188,7 @@ def create_execution_fragment():
                 snapshot.recent_mean_scores,
                 snapshot.episode,
             )
-            
+
             if fig_score:
                 st.plotly_chart(
                     fig_score,

@@ -5,7 +5,6 @@ Implements experience replay, epsilon-greedy exploration,
 and training loop management.
 """
 
-import os
 import random
 from collections import deque
 from typing import Any
@@ -14,12 +13,12 @@ import numpy as np
 import torch
 
 from model import Linear_QNet, QTrainer
+from observation_schema import OBSERVATION_SIZE
 from persistence import (
     CheckpointManager,
     ModelConfig,
 )
 from snake_env import SnakeGameAI
-from observation_schema import OBSERVATION_SIZE
 
 
 class ReplayMemory:
@@ -27,7 +26,6 @@ class ReplayMemory:
 
     Stores terminated flag separately from truncated for correct
     bootstrapping in Q-learning (terminated suppresses bootstrap).
-    
     Uses circular buffer with preallocated numpy arrays for efficient
     storage and sampling.
     """
@@ -352,17 +350,21 @@ class Agent:
 
             # Capture Bellman details on the last gradient step only if requested
             if i == self.gradient_steps - 1 and capture_bellman:
-                loss, details = self.trainer.train_step(
+                result = self.trainer.train_step(
                     states_t, actions_t, rewards_t, next_states_t, terminated_t,
                     capture_details=True
                 )
+                assert isinstance(result, tuple), "Expected tuple when capture_details=True"
+                loss, details = result
                 self._last_bellman_details = details
             else:
-                loss = self.trainer.train_step(
+                loss_result = self.trainer.train_step(
                     states_t, actions_t, rewards_t, next_states_t, terminated_t,
                     capture_details=False
                 )
-            losses.append(loss)  # type: ignore
+                assert isinstance(loss_result, float), "Expected float when capture_details=False"
+                loss = loss_result
+            losses.append(loss)
 
         return losses
 
@@ -377,9 +379,9 @@ class Agent:
     def decay_epsilon_by_steps(self, training_transitions: int, decay_steps: int) -> None:
         """
         Decay exploration rate based on training transition count.
-        
+
         Uses linear decay from epsilon_start to epsilon_end over decay_steps.
-        
+
         Args:
             training_transitions: Number of training transitions completed
             decay_steps: Total transitions over which to decay epsilon
@@ -528,7 +530,7 @@ def train_agent(
     Returns:
         Dictionary with training history
     """
-    from training import TrainingController, train_headless, ActivityMode
+    from training import ActivityMode, TrainingController, train_headless
 
     # Create controller with agent's config
     controller = TrainingController()

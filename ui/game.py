@@ -94,19 +94,18 @@ def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.
             x=snake_x,
             y=snake_y,
             mode="markers",
-            marker=dict(
-                color=colors,
-                size=sizes,
-                symbol="square",
-                line=dict(color="#1a5c1a", width=1),
-            ),
+            marker={
+                "color": colors,
+                "size": sizes,
+                "symbol": "square",
+                "line": {"color": "#1a5c1a", "width": 1},
+            },
             showlegend=False,
             hoverinfo="skip",
         ))
 
         # Eyes on head - separate trace
         head_x, head_y = snake[0]
-        eye_size = 0.15
         if direction == 0:  # Right
             eye_positions = [(head_x + 0.65, head_y + 0.2), (head_x + 0.65, head_y + 0.6)]
         elif direction == 2:  # Left
@@ -122,7 +121,7 @@ def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.
             x=eye_x,
             y=eye_y,
             mode="markers",
-            marker=dict(color="white", size=8, symbol="circle"),
+            marker={"color": "white", "size": 8, "symbol": "circle"},
             showlegend=False,
             hoverinfo="skip",
         ))
@@ -134,12 +133,12 @@ def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.
             x=[fx + 0.5],
             y=[fy + 0.5],
             mode="markers",
-            marker=dict(
-                color="#FF4444",
-                size=22,
-                symbol="circle",
-                line=dict(color="#CC0000", width=2),
-            ),
+            marker={
+                "color": "#FF4444",
+                "size": 22,
+                "symbol": "circle",
+                "line": {"color": "#CC0000", "width": 2},
+            },
             showlegend=False,
             hoverinfo="skip",
         ))
@@ -148,7 +147,7 @@ def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.
             x=[fx + 0.3],
             y=[fy + 0.3],
             mode="markers",
-            marker=dict(color="#FFAAAA", size=8, symbol="circle"),
+            marker={"color": "#FFAAAA", "size": 8, "symbol": "circle"},
             showlegend=False,
             hoverinfo="skip",
         ))

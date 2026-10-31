@@ -15,8 +15,8 @@ import torch
 
 from agent import Agent, ReplayMemory
 from model import Linear_QNet, QTrainer
-from snake_env import SnakeGameAI
 from observation_schema import OBSERVATION_SIZE
+from snake_env import SnakeGameAI
 
 
 def test_train_evaluate_manual_pause_resume_single_step():

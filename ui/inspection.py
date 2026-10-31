@@ -10,11 +10,9 @@ Full-width section below the main game/progress row.
 import streamlit as st
 
 
-def render_training_diagnostics(controller: "TrainingController", snapshot: "TrainingSnapshot") -> None:
+def render_training_diagnostics(controller: "TrainingController", snapshot: "TrainingSnapshot") -> None:  # noqa: F821
     """Render the lower Training Diagnostics area (collapsible)."""
-    from training import TrainingController, TrainingSnapshot
     from ui.charts import (
-        render_bellman_update,
         render_epsilon_chart,
         render_loss_chart,
         render_score_chart,
