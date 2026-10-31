@@ -80,7 +80,7 @@ def init_ui_state():
         "show_activations": False,
         "show_grid": True,
         "max_burst_steps": 50,
-        "burst_time_budget": 0.05,
+        "burst_time_budget": 0.2,  # Increased from 0.05 to allow multiple optimizer steps per burst
         # Event tracking
         "last_event_id": 0,
     }
@@ -90,12 +90,6 @@ def init_ui_state():
 
 
 init_ui_state()
-
-# Initialize history revision tracking for score chart caching
-if "last_history_revision" not in st.session_state:
-    st.session_state.last_history_revision = -1
-if "cached_score_chart" not in st.session_state:
-    st.session_state.cached_score_chart = None
 
 
 # =============================================================================
@@ -116,7 +110,8 @@ def create_execution_fragment():
     # FastTraining uses burst logic inside the fragment
     if running:
         if st.session_state.get("execution_policy", "Watch") == "FastTraining":
-            interval = 0.1  # Refresh UI every 100ms, burst inside fragment
+            # Fragment interval should be >= burst_time_budget to avoid overlapping runs
+            interval = max(0.2, float(st.session_state.get("burst_time_budget", 0.2)))
         else:
             interval = max(0.05, float(st.session_state.get("speed", 0.1)))
     else:
@@ -187,18 +182,12 @@ def create_execution_fragment():
                     st.markdown(event_html, unsafe_allow_html=True)
 
         with progress_col:
-            # Score Chart (main progress indicator) - cached, only rebuilds when history revision changes
-            current_revision = snapshot.history_revision
-            if current_revision != st.session_state.last_history_revision:
-                fig_score = render_score_chart(
-                    snapshot.recent_scores,
-                    snapshot.recent_mean_scores,
-                    snapshot.episode,
-                )
-                st.session_state.cached_score_chart = fig_score
-                st.session_state.last_history_revision = current_revision
-            else:
-                fig_score = st.session_state.cached_score_chart
+            # Score Chart (main progress indicator) - recreated each render (faster than cached serialization)
+            fig_score = render_score_chart(
+                snapshot.recent_scores,
+                snapshot.recent_mean_scores,
+                snapshot.episode,
+            )
             
             if fig_score:
                 st.plotly_chart(

@@ -109,16 +109,16 @@ def render_score_chart(
             font={"size": 12, "color": "rgba(128,128,128,0.8)"},
         )
 
-    fig.update_layout(
-        title={"text": "Episode Scores", "font": {"size": 11}},
-        xaxis_title="Episode",
-        yaxis_title="Score",
-    )
+    fig.update_layout({
+        "title": {"text": "Episode Scores", "font": {"size": 11}},
+        "xaxis_title": "Episode",
+        "yaxis_title": "Score",
+    })
 
     # Apply template FIRST (base layout)
     fig = apply_template(fig, height=CHART_HEIGHT_MAIN, uirevision="snake-scores")
     # Chart-specific margins
-    fig.update_layout(margin={"l": 50, "r": 20, "t": 35, "b": 40})
+    fig.update_layout({"margin": {"l": 50, "r": 20, "t": 35, "b": 40}})
     return fig
 
 
@@ -233,15 +233,15 @@ def render_loss_chart(
         yaxis_config["type"] = "log"
         yaxis_config["title"] = "Loss (log)"
 
-    fig.update_layout(
-        title={"text": "Loss per Optimizer Update", "font": {"size": 11}},
-        xaxis_title="Optimizer Step",
-        yaxis=yaxis_config,
-    )
+    fig.update_layout({
+        "title": {"text": "Loss per Optimizer Update", "font": {"size": 11}},
+        "xaxis_title": "Optimizer Step",
+        "yaxis": yaxis_config,
+    })
 
     # Apply template FIRST (base layout)
     fig = apply_template(fig, height=CHART_HEIGHT_SMALL, uirevision="snake-loss")
-    fig.update_layout(margin={"l": 50, "r": 20, "t": 35, "b": 40})
+    fig.update_layout({"margin": {"l": 50, "r": 20, "t": 35, "b": 40}})
     return fig
 
 
@@ -284,15 +284,15 @@ def render_epsilon_chart(
             font={"color": "rgba(128,128,128,0.8)", "size": 12},
         )
 
-    fig.update_layout(
-        title={"text": "Exploration Rate (ε)", "font": {"size": 11}},
-        xaxis_title="Episode",
-        yaxis={"range": [0, 1.05], "title": "ε"},
-    )
+    fig.update_layout({
+        "title": {"text": "Exploration Rate (ε)", "font": {"size": 11}},
+        "xaxis_title": "Episode",
+        "yaxis": {"range": [0, 1.05], "title": "ε"},
+    })
 
     # Apply template FIRST (base layout)
     fig = apply_template(fig, height=CHART_HEIGHT_SMALL, uirevision="snake-epsilon")
-    fig.update_layout(margin={"l": 50, "r": 20, "t": 35, "b": 40})
+    fig.update_layout({"margin": {"l": 50, "r": 20, "t": 35, "b": 40}})
     return fig
 
 
@@ -344,15 +344,15 @@ def render_throughput_chart(
             font={"color": "rgba(128,128,128,0.8)", "size": 12},
         )
 
-    fig.update_layout(
-        title={"text": "Training Throughput", "font": {"size": 11}},
-        xaxis_title="Measurement Step",
-        yaxis_title="Rate (per sec)",
-    )
+    fig.update_layout({
+        "title": {"text": "Training Throughput", "font": {"size": 11}},
+        "xaxis_title": "Measurement Step",
+        "yaxis_title": "Rate (per sec)",
+    })
 
     # Apply template FIRST (base layout)
     fig = apply_template(fig, height=CHART_HEIGHT_SMALL, uirevision="snake-throughput")
-    fig.update_layout(margin={"l": 50, "r": 20, "t": 35, "b": 40})
+    fig.update_layout({"margin": {"l": 50, "r": 20, "t": 35, "b": 40}})
     return fig
 
 
@@ -526,12 +526,12 @@ def render_q_values(
     # Apply template FIRST (base layout)
     fig = apply_template(fig, height=CHART_HEIGHT_QVALUES, uirevision="snake-qvalues")
     # Then chart-specific layout
-    fig.update_layout(
-        title={"text": "Q-Values per Action", "font": {"size": 11}},
-        yaxis_title="Q-Value",
-        annotations=annotations,
-        margin={"l": 50, "r": 20, "t": 55, "b": 45},
-    )
+    fig.update_layout({
+        "title": {"text": "Q-Values per Action", "font": {"size": 11}},
+        "yaxis_title": "Q-Value",
+        "annotations": annotations,
+        "margin": {"l": 50, "r": 20, "t": 55, "b": 45},
+    })
 
     # Ensure y-axis has padding for annotations
     y_min = min(q_values) if len(q_values) > 0 else -1
@@ -904,15 +904,15 @@ def render_eval_comparison(
     if not train_scores and not eval_scores:
         return None
 
-    fig.update_layout(
-        title={"text": "Training vs Evaluation Scores", "font": {"size": 11}},
-        xaxis_title="Episode / Eval Run",
-        yaxis_title="Score",
-    )
+    fig.update_layout({
+        "title": {"text": "Training vs Evaluation Scores", "font": {"size": 11}},
+        "xaxis_title": "Episode / Eval Run",
+        "yaxis_title": "Score",
+    })
 
     # Apply template FIRST (base layout)
     fig = apply_template(fig, height=CHART_HEIGHT_MAIN, uirevision="snake-eval-comparison")
-    fig.update_layout(margin={"l": 50, "r": 20, "t": 35, "b": 40})
+    fig.update_layout({"margin": {"l": 50, "r": 20, "t": 35, "b": 40}})
     return fig
 
 
@@ -929,13 +929,13 @@ def render_bellman_update(details: dict | None) -> go.Figure | None:
     """
     if not details:
         fig = go.Figure()
-        fig.add_annotation(
-            x=0.5, y=0.5, xref="paper", yref="paper",
-            text="No Bellman update available\n(Replay not active or no recent training)",
-            showarrow=False, font={"size": 12, "color": "rgba(128,128,128,0.8)"}
-        )
+        fig.add_annotation({
+            "x": 0.5, "y": 0.5, "xref": "paper", "yref": "paper",
+            "text": "No Bellman update available\n(Replay not active or no recent training)",
+            "showarrow": False, "font": {"size": 12, "color": "rgba(128,128,128,0.8)"}
+        })
         fig = apply_template(fig, height=300, uirevision="snake-bellman")
-        fig.update_layout(margin={"l": 50, "r": 20, "t": 35, "b": 40})
+        fig.update_layout({"margin": {"l": 50, "r": 20, "t": 35, "b": 40}})
         return fig
 
     # Extract values

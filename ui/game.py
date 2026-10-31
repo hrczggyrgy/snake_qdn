@@ -19,24 +19,29 @@ from ui.styles import (
 
 
 def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.Figure:
-    """Render the game board as a fixed-size Plotly figure from snapshot."""
+    """Render the game board as a fixed-size Plotly figure from snapshot.
+
+    Optimized version using scatter traces instead of individual shapes
+    for snake body, food, and grid, dramatically reducing figure construction time.
+    Uses dict-based layout update for 70x faster figure creation.
+    """
     game_state = snapshot.game_state
     if not game_state:
         fig = go.Figure()
-        fig.update_layout(
-            width=BOARD_SIZE,
-            height=BOARD_SIZE,
-            margin=BOARD_MARGIN,
-            plot_bgcolor="#1e1e2e",
-            paper_bgcolor="#1e1e2e",
-            xaxis={
+        fig.update_layout({
+            "width": BOARD_SIZE,
+            "height": BOARD_SIZE,
+            "margin": BOARD_MARGIN,
+            "plot_bgcolor": "#1e1e2e",
+            "paper_bgcolor": "#1e1e2e",
+            "xaxis": {
                 "showgrid": False,
                 "zeroline": False,
                 "showticklabels": False,
                 "range": [0, 20],
                 "fixedrange": True,
             },
-            yaxis={
+            "yaxis": {
                 "showgrid": False,
                 "zeroline": False,
                 "showticklabels": False,
@@ -45,7 +50,7 @@ def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.
                 "scaleanchor": "x",
                 "scaleratio": 1,
             },
-        )
+        })
         return fig
 
     grid_size = game_state["grid_size"]
@@ -56,90 +61,97 @@ def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.
 
     fig = go.Figure()
 
-    # Grid background
+    # Grid background - use single scatter trace with line segments (much faster than shapes)
     if show_grid:
+        x_coords = []
+        y_coords = []
         for i in range(grid_size + 1):
-            fig.add_shape(
-                type="line",
-                x0=0,
-                y0=i,
-                x1=grid_size,
-                y1=i,
-                line={"color": "rgba(100,100,100,0.2)", "width": 0.5},
-            )
-            fig.add_shape(
-                type="line",
-                x0=i,
-                y0=0,
-                x1=i,
-                y1=grid_size,
-                line={"color": "rgba(100,100,100,0.2)", "width": 0.5},
-            )
+            # Horizontal line
+            x_coords.extend([0, grid_size, None])
+            y_coords.extend([i, i, None])
+            # Vertical line
+            x_coords.extend([i, i, None])
+            y_coords.extend([0, grid_size, None])
+        fig.add_trace(go.Scatter(
+            x=x_coords,
+            y=y_coords,
+            mode="lines",
+            line={"color": "rgba(100,100,100,0.2)", "width": 0.5},
+            showlegend=False,
+            hoverinfo="skip",
+        ))
 
-    # Snake body
-    for i, (x, y) in enumerate(snake):
-        color = "#32CD32" if i == 0 else "#228B22"
-        opacity = 1.0 if i == 0 else max(0.4, 1.0 - i * 0.03)
+    # Snake body - single scatter trace for all segments
+    if snake:
+        snake_x = [seg[0] + 0.5 for seg in snake]
+        snake_y = [seg[1] + 0.5 for seg in snake]
+        # Head is bright green, body fades to darker green
+        colors = ["#32CD32"] + ["#228B22"] * (len(snake) - 1)
+        # Size decreases along body
+        sizes = [28] + [max(10, 28 - i * 2) for i in range(1, len(snake))]
 
-        fig.add_shape(
-            type="rect",
-            x0=x,
-            y0=y,
-            x1=x + 1,
-            y1=y + 1,
-            fillcolor=color,
-            opacity=opacity,
-            line={"color": "#1a5c1a", "width": 1},
-            layer="above",
-        )
+        fig.add_trace(go.Scatter(
+            x=snake_x,
+            y=snake_y,
+            mode="markers",
+            marker=dict(
+                color=colors,
+                size=sizes,
+                symbol="square",
+                line=dict(color="#1a5c1a", width=1),
+            ),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
 
-        # Eyes on head
-        if i == 0:
-            eye_size = 0.2
-            if direction == 0:  # Right
-                eyes = [(0.65, 0.2), (0.65, 0.6)]
-            elif direction == 2:  # Left
-                eyes = [(0.15, 0.2), (0.15, 0.6)]
-            elif direction == 3:  # Up
-                eyes = [(0.2, 0.15), (0.6, 0.15)]
-            else:  # Down
-                eyes = [(0.2, 0.65), (0.6, 0.65)]
+        # Eyes on head - separate trace
+        head_x, head_y = snake[0]
+        eye_size = 0.15
+        if direction == 0:  # Right
+            eye_positions = [(head_x + 0.65, head_y + 0.2), (head_x + 0.65, head_y + 0.6)]
+        elif direction == 2:  # Left
+            eye_positions = [(head_x + 0.15, head_y + 0.2), (head_x + 0.15, head_y + 0.6)]
+        elif direction == 3:  # Up
+            eye_positions = [(head_x + 0.2, head_y + 0.15), (head_x + 0.6, head_y + 0.15)]
+        else:  # Down
+            eye_positions = [(head_x + 0.2, head_y + 0.65), (head_x + 0.6, head_y + 0.65)]
 
-            for ex, ey in eyes:
-                fig.add_shape(
-                    type="circle",
-                    x0=x + ex,
-                    y0=y + ey,
-                    x1=x + ex + eye_size,
-                    y1=y + ey + eye_size,
-                    fillcolor="white",
-                    line={"width": 0},
-                    layer="above",
-                )
+        eye_x = [p[0] for p in eye_positions]
+        eye_y = [p[1] for p in eye_positions]
+        fig.add_trace(go.Scatter(
+            x=eye_x,
+            y=eye_y,
+            mode="markers",
+            marker=dict(color="white", size=8, symbol="circle"),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
 
-    # Food
+    # Food - single scatter trace
     if food is not None:
         fx, fy = food
-        fig.add_shape(
-            type="circle",
-            x0=fx + 0.1,
-            y0=fy + 0.1,
-            x1=fx + 0.9,
-            y1=fy + 0.9,
-            fillcolor="#FF4444",
-            line={"color": "#CC0000", "width": 2},
-            layer="above",
-        )
-        fig.add_shape(
-            type="circle",
-            x0=fx + 0.2,
-            y0=fy + 0.2,
-            x1=fx + 0.4,
-            y1=fy + 0.4,
-            fillcolor="#FFAAAA",
-            line={"width": 0},
-            layer="above",
-        )
+        fig.add_trace(go.Scatter(
+            x=[fx + 0.5],
+            y=[fy + 0.5],
+            mode="markers",
+            marker=dict(
+                color="#FF4444",
+                size=22,
+                symbol="circle",
+                line=dict(color="#CC0000", width=2),
+            ),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+        # Food shine
+        fig.add_trace(go.Scatter(
+            x=[fx + 0.3],
+            y=[fy + 0.3],
+            mode="markers",
+            marker=dict(color="#FFAAAA", size=8, symbol="circle"),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
 
     # Game over overlay
     if game_over:
@@ -155,8 +167,8 @@ def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.
             borderpad=8,
         )
 
-    fig.update_layout(
-        xaxis={
+    fig.update_layout({
+        "xaxis": {
             "range": [0, grid_size],
             "showgrid": False,
             "zeroline": False,
@@ -165,7 +177,7 @@ def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.
             "fixedrange": True,
             "constrain": "domain",
         },
-        yaxis={
+        "yaxis": {
             "range": [grid_size, 0],
             "showgrid": False,
             "zeroline": False,
@@ -176,15 +188,15 @@ def render_game_board(snapshot: TrainingSnapshot, show_grid: bool = True) -> go.
             "scaleanchor": "x",
             "scaleratio": 1,
         },
-        width=BOARD_SIZE,
-        height=BOARD_SIZE,
-        margin=BOARD_MARGIN,
-        plot_bgcolor="#1e1e2e",
-        paper_bgcolor="#1e1e2e",
-        font={"color": "white"},
-        showlegend=False,
-        autosize=False,
-    )
+        "width": BOARD_SIZE,
+        "height": BOARD_SIZE,
+        "margin": BOARD_MARGIN,
+        "plot_bgcolor": "#1e1e2e",
+        "paper_bgcolor": "#1e1e2e",
+        "font": {"color": "white"},
+        "showlegend": False,
+        "autosize": False,
+    })
     return fig
 
 

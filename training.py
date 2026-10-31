@@ -728,7 +728,7 @@ class TrainingController:
             self._execution_policy = execution_policy
             return self._step_impl(action)
 
-    def _step_impl(self, action: int | None = None) -> TrainingSnapshot:
+    def _step_impl(self, action: int | None = None, skip_diagnostics: bool = False) -> TrainingSnapshot:
         """Internal step implementation (must hold self._lock)."""
         if self._faulted:
             raise RuntimeError(
@@ -834,7 +834,17 @@ class TrainingController:
                 )
             
             # Capture Bellman details periodically (every 10 training steps when replay is ready)
-            capture_bellman = (self._metrics.get("training_transitions", 0) % 10 == 0) and replay_ready
+            # Skip during FastTraining bursts to avoid overhead; UI only shows last snapshot
+            is_fast_training = (
+                self._mode == ActivityMode.TRAIN
+                and hasattr(self, '_execution_policy')
+                and self._execution_policy == "FastTraining"
+            )
+            capture_bellman = (
+                not is_fast_training
+                and (self._metrics.get("training_transitions", 0) % 10 == 0)
+                and replay_ready
+            )
             
             t_opt_start = time.monotonic()
             optimizer_steps_before = self._agent.trainer.training_step
@@ -883,13 +893,17 @@ class TrainingController:
         self._metrics["env_transitions"] = (self._metrics.get("env_transitions") or 0) + 1
 
         # --- Update Q-values for NEXT state visualization ---
-        if self._agent is not None:
+        if self._agent is not None and not skip_diagnostics:
             t_diag_start = time.monotonic()
             self._q_values = self._agent.get_q_values(next_obs)
             self._action_probs = self.agent.trainer.probabilities_from_q_values(self._q_values)
             self._metrics["time_diagnostics"] = (
                 (self._metrics.get("time_diagnostics") or 0.0) + time.monotonic() - t_diag_start
             )
+        elif skip_diagnostics:
+            # Clear Q-values so snapshot doesn't show stale data
+            self._q_values = None
+            self._action_probs = None
 
         # --- Handle episode completion ---
         if done:
@@ -999,12 +1013,22 @@ class TrainingController:
                 burst_start = _time.monotonic()
                 steps_executed = 0
 
+                # Execute burst without diagnostics for speed
                 while steps_executed < max_steps and not self._game_over:
-                    self._step_impl()
+                    self._step_impl(skip_diagnostics=True)
                     steps_executed += 1
 
                     if _time.monotonic() - burst_start >= time_budget:
                         break
+
+                # After burst, compute diagnostics for the final state (for UI snapshot)
+                if steps_executed > 0 and not self._game_over and self._agent is not None:
+                    t_diag_start = time.monotonic()
+                    self._q_values = self._agent.get_q_values(self._observation)
+                    self._action_probs = self.agent.trainer.probabilities_from_q_values(self._q_values)
+                    self._metrics["time_diagnostics"] = (
+                        (self._metrics.get("time_diagnostics") or 0.0) + time.monotonic() - t_diag_start
+                    )
 
                 # After burst, handle terminal board based on mode
                 if self._game_over:
