@@ -2,12 +2,18 @@
 Snake Environment following Gymnasium API conventions.
 
 Implements a discrete grid-based Snake game environment
-with a 14-dimensional observation space and 3 discrete actions.
+with a 16-dimensional observation space and 3 discrete actions.
 
 Bug fixes from original:
 - B1: Removed duplicate timeout block
 - B2: Directions as tuple (no np.int64 leakage)
 - B9: Added allow_tail_entry to EnvConfig
+- C1: Fixed food collision - food no longer in _occupied
+- C2: Fixed n-step buffer flush
+- M1: Fixed reward shaping on eating step
+- M3: Fixed observation dimension (16, not 14)
+- M4: Fixed tail direction to be relative to heading
+- M7: Removed _empty_cells list, use rejection sampling
 """
 
 import random
@@ -27,13 +33,13 @@ class SnakeEnv:
     """
     Snake Game Environment compatible with Gymnasium API.
 
-    Observation Space (14-dim vector):
+    Observation Space (17-dim vector):
     - [0-2]: Danger straight, right, left (collision within 1 step)
-    - [3-5]: Danger straight, right, left (collision within 2 steps) - NEW
+    - [3-5]: Danger straight, right, left (collision within 2 steps)
     - [6-9]: Current direction (left, right, up, down) - one-hot
     - [10-13]: Food relative location (left, right, up, down)
-    - [14]: Normalized distance to food - NEW
-    - [15]: Relative tail direction (0=same, 1=right, 2=back, 3=left) - NEW
+    - [14]: Normalized distance to food
+    - [15-16]: Relative tail direction (dx, dy relative to heading)
 
     Action Space (3 discrete):
     - 0: Straight
@@ -44,8 +50,10 @@ class SnakeEnv:
     - Eating food: +10 (configurable)
     - Game Over: -10 (configurable)
     - Step penalty: -0.01 (configurable)
-    - Potential-based shaping: +0.1 * (prev_dist - new_dist) - NEW
+    - Potential-based shaping: +shaping_coef * (prev_dist - new_dist)
     """
+
+    OBS_DIM = 17  # Single source of truth for observation dimension
 
     def __init__(
         self,
@@ -58,6 +66,7 @@ class SnakeEnv:
         render_mode: str | None = None,
         seed: int | None = None,
         allow_tail_entry: bool | None = None,
+        shaping_coef: float | None = None,
     ):
         if config is not None:
             self.config = config
@@ -71,6 +80,7 @@ class SnakeEnv:
             if render_mode is not None: kwargs["render_mode"] = render_mode
             if seed is not None: kwargs["seed"] = seed
             if allow_tail_entry is not None: kwargs["allow_tail_entry"] = allow_tail_entry
+            if shaping_coef is not None: kwargs["shaping_coef"] = shaping_coef
             self.config = EnvConfig(**kwargs) if kwargs else EnvConfig()
 
         # Instance-local random generators for RNG isolation
@@ -82,20 +92,18 @@ class SnakeEnv:
 
         # Action/observation space info
         self.action_space_n = 3
-        self.observation_space_shape = (14,)  # Extended to 14 features
+        self.observation_space_shape = (self.OBS_DIM,)
 
         # For rendering
         self.cell_size = 20
         self.window_size = self.config.grid_size * self.cell_size
 
-        # Precompute empty cells for efficient food placement
-        self._empty_cells: list[tuple[int, int]] = []
-        # O(1) collision check: set of occupied cells
+        # O(1) collision check: set of occupied cells (snake only, NOT food)
         self._occupied: set[tuple[int, int]] = set()
 
         # For reward shaping
         self._prev_food_dist: float = 0.0
-        self._shaping_coef = 0.1
+        self._shaping_coef = self.config.shaping_coef
 
         self.reset()
 
@@ -132,8 +140,8 @@ class SnakeEnv:
             self.config.grid_size * self.config.grid_size + 2 * len(self.snake)
         )
 
-        # Rebuild empty cells and occupied set
-        self._rebuild_empty_cells()
+        # Rebuild occupied set and place food
+        self._rebuild_occupied()
         self._place_food()
         self.game_over = False
 
@@ -149,30 +157,45 @@ class SnakeEnv:
 
         return observation, info
 
-    def _rebuild_empty_cells(self) -> None:
-        """Rebuild the list of empty cells and occupied set for efficient operations."""
-        snake_set = set(self.snake)
-        self._occupied = snake_set
-        self._empty_cells = [
-            (x, y)
-            for x in range(self.config.grid_size)
-            for y in range(self.config.grid_size)
-            if (x, y) not in snake_set
-        ]
+    def _rebuild_occupied(self) -> None:
+        """Rebuild the set of occupied cells (snake only)."""
+        self._occupied = set(self.snake)
 
     def _place_food(self) -> None:
         """Place food at random empty position using instance-local RNG."""
-        if not hasattr(self, "_empty_cells") or len(self._empty_cells) + len(self.snake) != self.config.grid_size * self.config.grid_size:
-            self._rebuild_empty_cells()
-
-        if self._empty_cells:
-            self.food = self._rng.choice(self._empty_cells)
-            # Remove food position from empty cells and add to occupied
-            self._empty_cells.remove(self.food)
-            self._occupied.add(self.food)
-        else:
+        grid_size = self.config.grid_size
+        total_cells = grid_size * grid_size
+        
+        # Rebuild occupied if snake was manually modified
+        if not hasattr(self, '_occupied') or len(self._occupied) != len(self.snake):
+            self._rebuild_occupied()
+        
+        if len(self._occupied) >= total_cells:
             # Board is full - snake has won (filled entire grid)
             self.food = None
+            return
+
+        # Sample food by rejection - O(1) for sparse boards, falls back to scan when dense
+        snake_len = len(self.snake)
+        if snake_len > total_cells * 0.6:
+            # Dense: build list of free cells once
+            free_cells = [
+                (x, y)
+                for x in range(grid_size)
+                for y in range(grid_size)
+                if (x, y) not in self._occupied
+            ]
+            self.food = self._rng.choice(free_cells)
+        else:
+            # Sparse: rejection sampling is faster
+            while True:
+                fx = self._rng.randrange(grid_size)
+                fy = self._rng.randrange(grid_size)
+                if (fx, fy) not in self._occupied:
+                    self.food = (fx, fy)
+                    break
+        
+        # Food is NOT added to _occupied - it's not a collision obstacle
 
     def is_board_full(self) -> bool:
         """Check if snake fills the entire board."""
@@ -243,16 +266,21 @@ class SnakeEnv:
             self._occupied.add(new_head)
             self.steps_since_food += 1
 
-            # Update empty cells: head occupies new cell
-            if new_head in self._empty_cells:
-                self._empty_cells.remove(new_head)
-
-            # Check food
-            if new_head == self.food:
+            # Check food BEFORE removing tail (so will_grow is correct)
+            ate_food = False
+            if self.food is not None and new_head == self.food:
+                ate_food = True
                 self.score += 1
                 reward = self.config.food_reward
                 self.steps_since_food = 0
+                
+                # On eating: update _prev_food_dist to new food position, skip shaping this step
                 self._place_food()
+                
+                if self.food is not None:
+                    self._prev_food_dist = abs(new_head[0] - self.food[0]) + abs(new_head[1] - self.food[1])
+                else:
+                    self._prev_food_dist = 0.0
 
                 # Check for victory (board full)
                 if self.is_board_full():
@@ -261,15 +289,12 @@ class SnakeEnv:
                     reward += self.config.food_reward  # Bonus for winning
                     termination_reason = "victory"
             else:
-                # Remove tail and add it back to empty cells
+                # Remove tail and update occupied set
                 tail = self.snake.pop()
-                self._occupied.remove(tail)
-                # Don't add tail to empty_cells if it's the same as new_head (tail-entry move)
                 if tail != new_head:
-                    self._empty_cells.append(tail)
+                    self._occupied.remove(tail)
 
             # Truncation: too many steps without food (time limit)
-            # This is a deliberate loop penalty - timeout gives death penalty
             if self.steps_since_food >= self.max_steps_without_food:
                 truncated = True
                 reward = self.config.death_penalty
@@ -277,7 +302,8 @@ class SnakeEnv:
                 termination_reason = "timeout"
 
             # Reward shaping: potential-based (Manhattan distance to food)
-            if self.food is not None and not terminated and not truncated:
+            # Skip on the step where food was eaten (already handled above)
+            if self.food is not None and not terminated and not truncated and not ate_food:
                 new_dist = abs(new_head[0] - self.food[0]) + abs(new_head[1] - self.food[1])
                 shaping_reward = self._shaping_coef * (self._prev_food_dist - new_dist)
                 reward += shaping_reward
@@ -301,12 +327,12 @@ class SnakeEnv:
 
     def _get_observation(self) -> np.ndarray:
         """
-        Get 14-dimensional observation vector:
+        Get 16-dimensional observation vector:
         [danger_straight_1, danger_right_1, danger_left_1,
          danger_straight_2, danger_right_2, danger_left_2,
          dir_left, dir_right, dir_up, dir_down,
          food_left, food_right, food_up, food_down,
-         food_dist_norm, tail_dir_rel]
+         food_dist_norm, tail_dx, tail_dy]
         """
         head = self.snake[0]
 
@@ -326,7 +352,7 @@ class SnakeEnv:
         left_pos = (head[0] + DIRS[left_dir][0], head[1] + DIRS[left_dir][1])
         danger_left_1 = self._is_collision(left_pos)
 
-        # Danger detection (two steps ahead) - NEW
+        # Danger detection (two steps ahead)
         # Straight danger (2 steps)
         straight_pos_2 = (straight_pos[0] + DIRS[straight_dir][0], straight_pos[1] + DIRS[straight_dir][1])
         danger_straight_2 = self._is_collision(straight_pos_2)
@@ -350,6 +376,7 @@ class SnakeEnv:
             # Board full - all false
             food_left = food_right = food_up = food_down = 0.0
             food_dist_norm = 0.0
+            tail_dx = tail_dy = 0.0
         else:
             food_left = 1.0 if self.food[0] < head[0] else 0.0
             food_right = 1.0 if self.food[0] > head[0] else 0.0
@@ -360,29 +387,30 @@ class SnakeEnv:
             food_dist = abs(head[0] - self.food[0]) + abs(head[1] - self.food[1])
             food_dist_norm = food_dist / max_dist if max_dist > 0 else 0.0
 
-        # Relative tail direction - NEW
-        if len(self.snake) >= 2:
-            tail = self.snake[-1]
-            # Vector from head to tail
-            dx = tail[0] - head[0]
-            dy = tail[1] - head[1]
-            # Determine relative direction
-            if dx == 1 and dy == 0:
-                tail_dir_rel = 0.0  # Same direction (right)
-            elif dx == 0 and dy == 1:
-                tail_dir_rel = 1.0  # Right turn (down)
-            elif dx == -1 and dy == 0:
-                tail_dir_rel = 2.0  # Back (left)
-            elif dx == 0 and dy == -1:
-                tail_dir_rel = 3.0  # Left turn (up)
+            # Relative tail direction as 2D vector (relative to heading)
+            # This gives the network meaningful continuous values instead of a categorical 0-3
+            if len(self.snake) >= 2:
+                tail = self.snake[-1]
+                dx = tail[0] - head[0]
+                dy = tail[1] - head[1]
+                
+                # Rotate by -heading to get relative coordinates
+                # direction: 0=right, 1=down, 2=left, 3=up
+                if self.direction == 0:  # facing right
+                    tail_dx, tail_dy = dx, dy
+                elif self.direction == 1:  # facing down
+                    tail_dx, tail_dy = -dy, dx
+                elif self.direction == 2:  # facing left
+                    tail_dx, tail_dy = -dx, -dy
+                else:  # facing up (3)
+                    tail_dx, tail_dy = dy, -dx
+                
+                # Normalize to roughly [-1, 1] range
+                max_coord = self.config.grid_size - 1
+                tail_dx = tail_dx / max_coord if max_coord > 0 else 0.0
+                tail_dy = tail_dy / max_coord if max_coord > 0 else 0.0
             else:
-                # Not adjacent - approximate
-                if abs(dx) > abs(dy):
-                    tail_dir_rel = 0.0 if dx > 0 else 2.0
-                else:
-                    tail_dir_rel = 1.0 if dy > 0 else 3.0
-        else:
-            tail_dir_rel = 0.0
+                tail_dx = tail_dy = 0.0
 
         obs: np.ndarray = np.array(
             [
@@ -401,7 +429,8 @@ class SnakeEnv:
                 food_up,
                 food_down,
                 food_dist_norm,
-                tail_dir_rel,
+                tail_dx,
+                tail_dy,
             ],
             dtype=np.float32,
         )
@@ -547,12 +576,21 @@ class SnakeEnv:
         """Change grid size (used by curriculum). Requires reset."""
         if grid_size < 3:
             raise ValueError(f"grid_size must be >= 3, got {grid_size}")
-        self.config.grid_size = grid_size
+        self.config = EnvConfig(
+            grid_size=grid_size,
+            step_penalty=self.config.step_penalty,
+            food_reward=self.config.food_reward,
+            death_penalty=self.config.death_penalty,
+            render_mode=self.config.render_mode,
+            seed=self.config.seed,
+            allow_tail_entry=self.config.allow_tail_entry,
+            shaping_coef=self.config.shaping_coef,
+        )
         self.window_size = grid_size * self.cell_size
         # Update timeout for new grid
         self.max_steps_without_food = grid_size * grid_size + 2 * len(self.snake)
-        # Rebuild empty cells cache
-        self._rebuild_empty_cells()
+        # Rebuild occupied set
+        self._rebuild_occupied()
 
 
 # Convenience function for gymnasium registration
@@ -563,13 +601,15 @@ def make_snake_env(**kwargs) -> SnakeEnv:
 
 if __name__ == "__main__":
     # Quick test
+    import numpy as np
     env = SnakeEnv(config=EnvConfig(grid_size=10, render_mode="rgb_array"))
     obs, info = env.reset(seed=42)
     print(f"Observation shape: {obs.shape}")
     print(f"Observation: {obs}")
     print(f"Info: {info}")
 
-    for _ in range(10):
+    # Test eating
+    for _ in range(50):
         action = np.random.randint(0, 3)
         obs, reward, terminated, truncated, info = env.step(action)
         print(

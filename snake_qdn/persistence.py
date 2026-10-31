@@ -355,7 +355,7 @@ class CheckpointManager:
             scores_history=self.agent.scores_history.copy(),
             mean_scores_history=self.agent.mean_scores_history.copy(),
             epsilon_history=self.agent.epsilon_history.copy(),
-            loss_history=self.agent.trainer.loss_history.copy()[-1000:],
+            loss_history=list(self.agent.trainer.loss_history)[-1000:],
             memory=memory_data,
             rng_state_python=rng_python,
             rng_state_numpy=rng_numpy,

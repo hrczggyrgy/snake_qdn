@@ -3,6 +3,10 @@ Experience Replay Buffer with n-step returns.
 
 Uses preallocated arrays for efficient storage and sampling.
 Supports n-step returns for faster credit assignment.
+
+Fixes:
+- C2: Proper flush of remaining transitions at episode end
+- Stores per-sample discount (gamma^k) for correct bootstrapping
 """
 
 import numpy as np
@@ -21,6 +25,7 @@ class NStepTransition:
     next_state: np.ndarray
     terminated: bool
     truncated: bool
+    discount: float  # gamma^k for this transition
 
 
 class ReplayBuffer:
@@ -36,7 +41,7 @@ class ReplayBuffer:
     def __init__(
         self,
         capacity: int = 100_000,
-        state_dim: int = 14,
+        state_dim: int = 17,  # Updated to 17 for new observation
         n_step: int = 3,
         gamma: float = 0.99,
     ):
@@ -54,44 +59,64 @@ class ReplayBuffer:
         self.next_states: np.ndarray = np.zeros((capacity, state_dim), dtype=np.float32)
         self.terminated: np.ndarray = np.zeros(capacity, dtype=bool)
         self.truncated: np.ndarray = np.zeros(capacity, dtype=bool)
+        self.discounts: np.ndarray = np.zeros(capacity, dtype=np.float32)  # gamma^k per sample
 
         # n-step buffer
         self._n_step_buffer: deque[tuple] = deque(maxlen=n_step)
 
-    def _compute_n_step_return(self) -> NStepTransition | None:
-        """Compute n-step return from buffer."""
-        if len(self._n_step_buffer) < self.n_step:
-            return None
+    def _emit(self, k: int) -> None:
+        """
+        Emit a k-step aggregated transition from the front of the n-step buffer.
+        Only removes the FIRST item from buffer (allows overlapping n-step returns).
+        
+        Args:
+            k: Number of steps to aggregate (1 <= k <= n_step)
+        """
+        if k <= 0 or k > len(self._n_step_buffer):
+            return
 
-        # Get the first transition (oldest)
-        state, action, _, _, _, _ = self._n_step_buffer[0]
+        items = list(self._n_step_buffer)[:k]
+        
+        # First transition's state and action
+        state, action, _, _, _, _ = items[0]
+        # Last transition's next_state, terminated, truncated
+        _, _, _, next_state, term, trunc = items[-1]
 
         # Accumulate rewards with discount
         reward = 0.0
-        for i, (_, _, r, _, term, trunc) in enumerate(self._n_step_buffer):
+        for i, (_, _, r, _, _, _) in enumerate(items):
             reward += (self.gamma**i) * r
-            if term or trunc:
-                # Episode ended - bootstrap only from this point
-                next_state, _, _, _, term, trunc = self._n_step_buffer[i]
-                return NStepTransition(
-                    state=state,
-                    action=action,
-                    reward=reward,
-                    next_state=next_state,
-                    terminated=term,
-                    truncated=trunc,
-                )
+            if i > 0:
+                # Check if any intermediate transition terminated/truncated
+                _, _, _, _, t, tr = items[i]
+                if t or tr:
+                    # Early termination - use that transition's next_state and flags
+                    _, _, _, next_state, term, trunc = items[i]
+                    break
+            else:
+                term = items[-1][4]
+                trunc = items[-1][5]
 
-        # Full n-step without termination
-        _, _, _, next_state, term, trunc = self._n_step_buffer[-1]
-        return NStepTransition(
-            state=state,
-            action=action,
-            reward=reward,
-            next_state=next_state,
-            terminated=term,
-            truncated=trunc,
-        )
+        # Discount for this k-step return
+        discount = self.gamma ** k
+
+        self._push_transition(state, action, reward, next_state, term, trunc, discount)
+
+        # Remove ONLY the first item (allows overlapping n-step returns)
+        self._n_step_buffer.popleft()
+
+    def _push_transition(self, state, action, reward, next_state, term, trunc, discount) -> None:
+        """Push aggregated transition to main buffer."""
+        self.states[self.position] = state
+        self.actions[self.position] = action
+        self.rewards[self.position] = reward
+        self.next_states[self.position] = next_state
+        self.terminated[self.position] = term
+        self.truncated[self.position] = trunc
+        self.discounts[self.position] = discount
+
+        self.position = (self.position + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
 
     def push(
         self,
@@ -114,42 +139,20 @@ class ReplayBuffer:
             (state, action, reward, next_state, terminated, truncated)
         )
 
-        # Try to compute n-step return
-        n_step_transition = self._compute_n_step_return()
-        if n_step_transition is not None:
-            self._push_transition(n_step_transition)
-            # Remove the oldest transition since we've used it for n-step return
-            if len(self._n_step_buffer) >= self.n_step:
-                self._n_step_buffer.popleft()
+        # If buffer is full, emit the oldest n_step items
+        if len(self._n_step_buffer) >= self.n_step:
+            self._emit(self.n_step)
 
-        # If episode ended, flush remaining n-step buffer
+        # If episode ended, flush remaining buffer: emit 1-step at a time
         if terminated or truncated:
             while self._n_step_buffer:
-                n_step_transition = self._compute_n_step_return()
-                if n_step_transition is not None:
-                    self._push_transition(n_step_transition)
-                # Remove the oldest transition
-                if self._n_step_buffer:
-                    self._n_step_buffer.popleft()
-            self._n_step_buffer.clear()
-
-    def _push_transition(self, transition: NStepTransition) -> None:
-        """Push aggregated transition to main buffer."""
-        self.states[self.position] = transition.state
-        self.actions[self.position] = transition.action
-        self.rewards[self.position] = transition.reward
-        self.next_states[self.position] = transition.next_state
-        self.terminated[self.position] = transition.terminated
-        self.truncated[self.position] = transition.truncated
-
-        self.position = (self.position + 1) % self.capacity
-        self.size = min(self.size + 1, self.capacity)
+                self._emit(1)
 
     def sample(self, batch_size: int) -> tuple[np.ndarray, ...]:
         """Sample random batch from memory.
 
         Returns:
-            states, actions, rewards, next_states, terminated, truncated
+            states, actions, rewards, next_states, terminated, truncated, discounts
         """
         indices = np.random.randint(0, self.size, size=batch_size)
         return (
@@ -159,6 +162,7 @@ class ReplayBuffer:
             self.next_states[indices],
             self.terminated[indices],
             self.truncated[indices],
+            self.discounts[indices],
         )
 
     def __len__(self) -> int:
@@ -182,6 +186,7 @@ class ReplayBuffer:
             "next_states": self.next_states[:self.size].copy(),
             "terminated": self.terminated[:self.size].copy(),
             "truncated": self.truncated[:self.size].copy(),
+            "discounts": self.discounts[:self.size].copy(),
             "size": self.size,
             "position": self.position,
             "capacity": self.capacity,
@@ -209,7 +214,7 @@ class ReplayBuffer:
             raise ValueError(f"gamma mismatch: checkpoint={state_dict.get('gamma')}, current={self.gamma}")
 
         # Restore arrays
-        for field in ["states", "actions", "rewards", "next_states", "terminated", "truncated"]:
+        for field in ["states", "actions", "rewards", "next_states", "terminated", "truncated", "discounts"]:
             if field in state_dict:
                 arr = state_dict[field]
                 self.__dict__[field][:self.size] = arr[:self.size]
@@ -217,14 +222,15 @@ class ReplayBuffer:
 
 if __name__ == "__main__":
     # Quick test
-    buf = ReplayBuffer(capacity=1000, state_dim=14, n_step=3, gamma=0.99)
+    import numpy as np
+    buf = ReplayBuffer(capacity=1000, state_dim=16, n_step=3, gamma=0.99)
 
     # Add some transitions
     for i in range(10):
-        state = np.random.randn(14).astype(np.float32)
+        state = np.random.randn(16).astype(np.float32)
         action = np.random.randint(0, 3)
         reward = np.random.randn()
-        next_state = np.random.randn(14).astype(np.float32)
+        next_state = np.random.randn(16).astype(np.float32)
         terminated = i == 9
         truncated = False
         buf.push(state, action, reward, next_state, terminated, truncated)
@@ -237,6 +243,7 @@ if __name__ == "__main__":
     print(f"Sampled states shape: {batch[0].shape}")
     print(f"Sampled actions shape: {batch[1].shape}")
     print(f"Sampled rewards shape: {batch[2].shape}")
+    print(f"Sampled discounts shape: {batch[6].shape}")
 
     # Test checkpoint
     state_dict = buf.get_state_dict()

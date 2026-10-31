@@ -972,7 +972,7 @@ class TrainingController:
             recent_scores = self._agent.scores_history[-self._max_history :]
             recent_mean_scores = self._agent.mean_scores_history[-self._max_history :]
             recent_epsilon = self._agent.epsilon_history[-self._max_history :]
-            recent_loss = self._agent.trainer.loss_history[-self._loss_max_history :]
+            recent_loss = list(self._agent.trainer.loss_history)[-self._loss_max_history :]
         else:
             recent_scores = []
             recent_mean_scores = []

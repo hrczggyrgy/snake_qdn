@@ -19,6 +19,7 @@ class EnvConfig:
     render_mode: str | None = "rgb_array"
     seed: int | None = None
     allow_tail_entry: bool = True
+    shaping_coef: float = 0.1  # Potential-based reward shaping coefficient
     # Curriculum settings
     curriculum_enabled: bool = True
     curriculum_stages: list[int] = field(default_factory=lambda: [8, 12, 20])
@@ -33,6 +34,7 @@ class EnvConfig:
         render_mode: str | None = "rgb_array",
         seed: int | None = None,
         allow_tail_entry: bool = True,
+        shaping_coef: float = 0.1,
         curriculum_enabled: bool = True,
         curriculum_stages: list[int] | None = None,
         curriculum_threshold: float = 10.0,
@@ -44,6 +46,7 @@ class EnvConfig:
         self.render_mode = render_mode
         self.seed = seed
         self.allow_tail_entry = allow_tail_entry
+        self.shaping_coef = shaping_coef
         self.curriculum_enabled = curriculum_enabled
         self.curriculum_stages = curriculum_stages or [8, 12, 20]
         self.curriculum_threshold = curriculum_threshold
@@ -67,14 +70,14 @@ class EnvConfig:
 class NetworkConfig:
     """Neural network architecture configuration."""
 
-    input_size: int = 16  # Extended observation (16D)
+    input_size: int = 17  # Extended observation (17D)
     hidden_size: int = 64  # Shrunk from 256
     output_size: int = 3
     dropout: float = 0.0  # Removed dropout (anti-pattern in DQN)
 
     def __init__(
         self,
-        input_size: int = 16,
+        input_size: int = 17,
         hidden_size: int = 64,
         output_size: int = 3,
         dropout: float = 0.0,

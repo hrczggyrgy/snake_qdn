@@ -2,6 +2,11 @@
 DQN Trainer with Double DQN, soft updates, and Bellman details.
 
 Handles experience replay, target network updates, and optimization.
+
+Fixes:
+- M6: Use deque for loss history (no copy on every step)
+- Use per-sample discount from replay buffer
+- Remove non_blocking=True (CPU default)
 """
 
 import numpy as np
@@ -9,6 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from collections import deque
 
 from .config import AgentConfig
 from .network import QNet
@@ -25,6 +31,7 @@ class QTrainer:
     - Huber loss
     - Gradient clipping
     - Bellman details for visualization
+    - Per-sample discount (gamma^k) from replay buffer
     """
 
     def __init__(
@@ -54,10 +61,9 @@ class QTrainer:
         # Loss function
         self.criterion = nn.SmoothL1Loss()  # Huber loss, more stable than MSE
 
-        # Training stats
+        # Training stats - use deque for O(1) bounded history
         self.training_step = 0
-        self.loss_history: list[float] = []
-        self._max_loss_history = 10_000
+        self.loss_history: deque[float] = deque(maxlen=10_000)
 
         # For Bellman details
         self._last_bellman_details = None
@@ -81,6 +87,7 @@ class QTrainer:
         rewards: torch.Tensor,
         next_states: torch.Tensor,
         terminated: torch.Tensor,
+        discounts: torch.Tensor,  # Per-sample gamma^k from replay buffer
         capture_details: bool = False,
     ) -> float | tuple[float, dict]:
         """
@@ -94,6 +101,7 @@ class QTrainer:
             terminated: Batch of terminated flags (batch_size,)
                        True = game over (suppress bootstrap)
                        False = continue or truncated (keep bootstrap)
+            discounts: Per-sample discount factors (gamma^k) from replay buffer
             capture_details: If True, return Bellman update details for first transition
 
         Returns:
@@ -101,18 +109,19 @@ class QTrainer:
         """
         self.model.train()
 
-        # Move to device
-        states = states.to(self.device, non_blocking=True)
-        actions = actions.to(self.device, non_blocking=True)
-        rewards = rewards.to(self.device, non_blocking=True)
-        next_states = next_states.to(self.device, non_blocking=True)
-        terminated = terminated.to(self.device, non_blocking=True)
+        # Move to device (non_blocking has no effect on CPU)
+        states = states.to(self.device)
+        actions = actions.to(self.device)
+        rewards = rewards.to(self.device)
+        next_states = next_states.to(self.device)
+        terminated = terminated.to(self.device)
+        discounts = discounts.to(self.device)
 
         # Current Q-values: Q(s, a)
         all_q_values = self.model(states)
         current_q_values = all_q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
 
-        # Target Q-values: r + γ^n * Q'(s', a') * (1 - terminated)
+        # Target Q-values: r + discount * Q'(s', a') * (1 - terminated)
         # Double DQN: choose action with online net, evaluate with target net
         with torch.no_grad():
             if self.config.double_dqn:
@@ -128,9 +137,8 @@ class QTrainer:
                 max_next_q_values = next_q_values.max(1)[0]
                 greedy_actions = next_q_values.argmax(1, keepdim=True)
 
-            # n-step return: γ^n
-            gamma_n = self.config.gamma ** self.config.n_step
-            target_q_values = rewards + (gamma_n * max_next_q_values * (1 - terminated.float()))
+            # Use per-sample discount from replay buffer
+            target_q_values = rewards + (discounts * max_next_q_values * (1 - terminated.float()))
 
         # Compute loss
         loss = self.criterion(current_q_values, target_q_values)
@@ -148,9 +156,6 @@ class QTrainer:
         self.training_step += 1
         loss_val: float = loss.item()
         self.loss_history.append(loss_val)
-        # Bound loss history to prevent unbounded growth
-        if len(self.loss_history) > self._max_loss_history:
-            self.loss_history = self.loss_history[-self._max_loss_history:]
 
         if capture_details:
             # Capture details for the first transition in batch
@@ -160,6 +165,7 @@ class QTrainer:
                 "reward": float(rewards[0].item()),
                 "next_state": next_states[0].detach().cpu().numpy(),
                 "terminated": bool(terminated[0].item()),
+                "discount": float(discounts[0].item()),
                 "current_q": all_q_values[0].detach().cpu().numpy(),
                 "current_q_taken": float(current_q_values[0].item()),
                 "target_q": float(target_q_values[0].item()),
@@ -179,7 +185,7 @@ class QTrainer:
         self.model.eval()
         with torch.no_grad():
             # Use torch.from_numpy for zero-copy conversion
-            state_tensor = torch.from_numpy(state).unsqueeze(0).to(self.device, non_blocking=True)
+            state_tensor = torch.from_numpy(state).unsqueeze(0).to(self.device)
             q_values: torch.Tensor = self.model(state_tensor)
             result: np.ndarray = q_values.cpu().numpy().squeeze()
             return result.astype(np.float32)
@@ -210,24 +216,25 @@ if __name__ == "__main__":
     # Test the trainer
     from .config import NetworkConfig, AgentConfig
 
-    config = AgentConfig(network=NetworkConfig(input_size=14, hidden_size=64))
+    config = AgentConfig(network=NetworkConfig(input_size=16, hidden_size=64))
     model = QNet(config.network)
     print(f"Model architecture:\n{model}")
 
     trainer = QTrainer(model, config)
 
     # Test forward pass
-    states = torch.randn(64, 14)
+    states = torch.randn(64, 16)
     actions = torch.randint(0, 3, (64,))
     rewards = torch.randn(64)
-    next_states = torch.randn(64, 14)
+    next_states = torch.randn(64, 16)
     dones = torch.randint(0, 2, (64,)).bool()
+    discounts = torch.full((64,), 0.99**3)  # gamma^3
 
-    loss = trainer.train_step(states, actions, rewards, next_states, dones)
+    loss = trainer.train_step(states, actions, rewards, next_states, dones, discounts)
     print(f"Training loss: {loss:.4f}")
 
     # Test inference
-    test_state = np.random.randn(14).astype(np.float32)
+    test_state = np.random.randn(16).astype(np.float32)
     q_vals = trainer.get_q_values(test_state)
     print(f"Q-values: {q_vals}")
 

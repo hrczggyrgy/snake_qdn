@@ -266,7 +266,7 @@ class Agent:
 
         # Perform gradient_steps optimizer updates
         for i in range(self.gradient_steps):
-            states, actions, rewards, next_states, terminated, truncated = self.memory.sample(
+            states, actions, rewards, next_states, terminated, truncated, discounts = self.memory.sample(
                 self.batch_size
             )
 
@@ -276,17 +276,18 @@ class Agent:
             rewards_t = torch.from_numpy(rewards)
             next_states_t = torch.from_numpy(next_states)
             terminated_t = torch.from_numpy(terminated)
+            discounts_t = torch.from_numpy(discounts)
 
             # Capture Bellman details on the last gradient step only if requested
             if i == self.gradient_steps - 1 and capture_bellman:
                 loss, details = self.trainer.train_step(
-                    states_t, actions_t, rewards_t, next_states_t, terminated_t,
+                    states_t, actions_t, rewards_t, next_states_t, terminated_t, discounts_t,
                     capture_details=True
                 )
                 self._last_bellman_details = details
             else:
                 loss = self.trainer.train_step(
-                    states_t, actions_t, rewards_t, next_states_t, terminated_t,
+                    states_t, actions_t, rewards_t, next_states_t, terminated_t, discounts_t,
                     capture_details=False
                 )
             losses.append(loss)
