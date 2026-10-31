@@ -593,17 +593,22 @@ CHART_HEIGHT_STATE = 360
 CHART_HEIGHT_QVALUES = 320
 CHART_HEIGHT_NETWORK = 360
 
-# State vector labels (grouped)
+# State vector labels (grouped) - 14D extended observation
 STATE_LABELS = [
-    ("Danger", ["Straight", "Right", "Left"]),
+    ("Danger (1-step)", ["Straight", "Right", "Left"]),
+    ("Danger (2-step)", ["Straight", "Right", "Left"]),
     ("Direction", ["Left", "Right", "Up", "Down"]),
     ("Food", ["Left", "Right", "Up", "Down"]),
+    ("Meta", ["Food Dist Norm", "Tail Dir Rel"]),
 ]
 
 STATE_LABELS_FLAT = [
-    "Danger Straight",
-    "Danger Right",
-    "Danger Left",
+    "Danger Straight (1)",
+    "Danger Right (1)",
+    "Danger Left (1)",
+    "Danger Straight (2)",
+    "Danger Right (2)",
+    "Danger Left (2)",
     "Dir Left",
     "Dir Right",
     "Dir Up",
@@ -612,6 +617,8 @@ STATE_LABELS_FLAT = [
     "Food Right",
     "Food Up",
     "Food Down",
+    "Food Dist Norm",
+    "Tail Dir Rel",
 ]
 
 # Action names

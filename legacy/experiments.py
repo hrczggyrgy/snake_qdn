@@ -17,9 +17,7 @@ from typing import Any, Callable
 import numpy as np
 import torch
 
-from agent import Agent
-from snake_env import SnakeGameAI
-from training import TrainingController, ActivityMode, AgentConfig, EnvConfig
+from snake_qdn import Agent, SnakeEnv as SnakeGameAI, TrainingController, ActivityMode, AgentConfig, EnvConfig, NetworkConfig
 
 
 @dataclass
@@ -856,7 +854,7 @@ def get_baseline_experiment() -> ExperimentConfig:
         name="baseline",
         description="Baseline DQN with default hyperparameters",
         agent_config=AgentConfig(
-            hidden_size=256,
+            network=NetworkConfig(input_size=16, hidden_size=256, output_size=3, dropout=0.1),
             lr=0.001,
             gamma=0.99,
             epsilon_start=1.0,
@@ -865,7 +863,6 @@ def get_baseline_experiment() -> ExperimentConfig:
             memory_size=100_000,
             batch_size=256,
             tau=0.005,
-            dropout=0.1,
             learning_starts=1000,
             train_every=1,
             gradient_steps=1,
@@ -890,7 +887,7 @@ def get_no_dropout_experiment() -> ExperimentConfig:
     config.name = "no_dropout"
     config.description = "Baseline with dropout=0"
     config.agent_config = AgentConfig(
-        hidden_size=256,
+        network=NetworkConfig(input_size=16, hidden_size=256, output_size=3, dropout=0.0),
         lr=0.001,
         gamma=0.99,
         epsilon_start=1.0,
@@ -899,7 +896,6 @@ def get_no_dropout_experiment() -> ExperimentConfig:
         memory_size=100_000,
         batch_size=256,
         tau=0.005,
-        dropout=0.0,  # No dropout
         learning_starts=1000,
         train_every=1,
         gradient_steps=1,
@@ -912,9 +908,9 @@ def get_smaller_model_experiment() -> ExperimentConfig:
     """Experiment with smaller hidden size."""
     config = get_baseline_experiment()
     config.name = "smaller_model"
-    config.description = "Smaller hidden size (128) with no dropout"
+    config.description = "Smaller hidden size (64) with no dropout"
     config.agent_config = AgentConfig(
-        hidden_size=128,
+        network=NetworkConfig(input_size=16, hidden_size=64, output_size=3, dropout=0.0),
         lr=0.001,
         gamma=0.99,
         epsilon_start=1.0,
@@ -923,7 +919,6 @@ def get_smaller_model_experiment() -> ExperimentConfig:
         memory_size=100_000,
         batch_size=256,
         tau=0.005,
-        dropout=0.0,
         learning_starts=1000,
         train_every=1,
         gradient_steps=1,
@@ -938,7 +933,7 @@ def get_step_epsilon_decay_experiment() -> ExperimentConfig:
     config.name = "step_epsilon_decay"
     config.description = "Epsilon decay by training transitions (not episodes)"
     config.agent_config = AgentConfig(
-        hidden_size=256,
+        network=NetworkConfig(input_size=16, hidden_size=256, output_size=3, dropout=0.1),
         lr=0.001,
         gamma=0.99,
         epsilon_start=1.0,
@@ -947,7 +942,6 @@ def get_step_epsilon_decay_experiment() -> ExperimentConfig:
         memory_size=100_000,
         batch_size=256,
         tau=0.005,
-        dropout=0.1,
         learning_starts=1000,
         train_every=1,
         gradient_steps=1,

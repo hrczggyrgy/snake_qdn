@@ -16,13 +16,13 @@ import time
 import numpy as np
 import pytest
 
-from experiments import (
+from legacy.experiments import (
     ExperimentRunner, ExperimentConfig, ExperimentBudget,
     get_baseline_experiment, EvaluationRecord, FinalEvaluation,
 )
-from training import TrainingController, ActivityMode
-from agent import Agent
-from snake_env import SnakeGameAI
+from snake_qdn import TrainingController, ActivityMode
+from snake_qdn import Agent
+from snake_qdn import SnakeEnv
 import torch
 
 
@@ -280,12 +280,12 @@ class TestEvaluationIsolation:
         assert agent.model.training
         
         # Simulate KeyboardInterrupt during evaluation
-        original_step = SnakeGameAI.step
+        original_step = SnakeEnv.step
         
         def interrupted_step(*args, **kwargs):
             raise KeyboardInterrupt("Simulated interrupt")
         
-        SnakeGameAI.step = interrupted_step
+        SnakeEnv.step = interrupted_step
         
         try:
             with pytest.raises(KeyboardInterrupt):
@@ -297,7 +297,7 @@ class TestEvaluationIsolation:
                     episode_seeds=[1, 2],
                 )
         finally:
-            SnakeGameAI.step = original_step
+            SnakeEnv.step = original_step
         
         # Model should be restored even after KeyboardInterrupt
         assert agent.model.training, "Model should be restored after KeyboardInterrupt"

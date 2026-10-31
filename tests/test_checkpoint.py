@@ -9,9 +9,9 @@ import numpy as np
 import pytest
 import torch
 
-from agent import Agent
-from model import Linear_QNet
-from persistence import (
+from snake_qdn import Agent
+from snake_qdn import QNet
+from snake_qdn import (
     CHECKPOINT_VERSION,
     CheckpointManager,
     ModelConfig,
@@ -108,8 +108,8 @@ class TestCheckpointSaveLoad:
 
     def test_save_load_full_checkpoint(self):
         """Test full checkpoint save/load roundtrip."""
-        model = Linear_QNet(11, 64, 3)
-        target_model = Linear_QNet(11, 64, 3)
+        model = QNet(11, 64, 3)
+        target_model = QNet(11, 64, 3)
         target_model.load_state_dict(model.state_dict())
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
@@ -139,8 +139,8 @@ class TestCheckpointSaveLoad:
             save_checkpoint(path, model, target_model, optimizer, training_state, model_config)
 
             # Create new instances and load
-            new_model = Linear_QNet(11, 64, 3)
-            new_target = Linear_QNet(11, 64, 3)
+            new_model = QNet(11, 64, 3)
+            new_target = QNet(11, 64, 3)
             new_optimizer = torch.optim.Adam(new_model.parameters(), lr=0.001)
 
             loaded_state, loaded_config = load_checkpoint(
@@ -165,8 +165,8 @@ class TestCheckpointSaveLoad:
 
     def test_version_check(self):
         """Test version checking rejects future versions."""
-        model = Linear_QNet(11, 64, 3)
-        target_model = Linear_QNet(11, 64, 3)
+        model = QNet(11, 64, 3)
+        target_model = QNet(11, 64, 3)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -205,8 +205,8 @@ class TestCheckpointSaveLoad:
             torch.save(checkpoint, path)
 
             # Should raise on load
-            new_model = Linear_QNet(11, 64, 3)
-            new_target = Linear_QNet(11, 64, 3)
+            new_model = QNet(11, 64, 3)
+            new_target = QNet(11, 64, 3)
             new_optimizer = torch.optim.Adam(new_model.parameters(), lr=0.001)
 
             with pytest.raises(ValueError, match="newer than supported"):
@@ -214,8 +214,8 @@ class TestCheckpointSaveLoad:
 
     def test_architecture_mismatch_strict(self):
         """Test architecture mismatch raises in strict mode."""
-        model = Linear_QNet(11, 64, 3)
-        target_model = Linear_QNet(11, 64, 3)
+        model = QNet(11, 64, 3)
+        target_model = QNet(11, 64, 3)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
         training_state = TrainingState(
             episode=0,
@@ -241,8 +241,8 @@ class TestCheckpointSaveLoad:
             save_checkpoint(path, model, target_model, optimizer, training_state, model_config)
 
             # Try to load into different architecture
-            new_model = Linear_QNet(11, 128, 3)  # Different hidden size
-            new_target = Linear_QNet(11, 128, 3)
+            new_model = QNet(11, 128, 3)  # Different hidden size
+            new_target = QNet(11, 128, 3)
             new_optimizer = torch.optim.Adam(new_model.parameters(), lr=0.001)
 
             with pytest.raises(ValueError, match="architecture mismatch"):
@@ -252,8 +252,8 @@ class TestCheckpointSaveLoad:
 
     def test_architecture_mismatch_non_strict(self):
         """Test architecture mismatch raises even with strict=False for shape mismatches."""
-        model = Linear_QNet(11, 64, 3)
-        target_model = Linear_QNet(11, 64, 3)
+        model = QNet(11, 64, 3)
+        target_model = QNet(11, 64, 3)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
         training_state = TrainingState(
             episode=0,
@@ -280,8 +280,8 @@ class TestCheckpointSaveLoad:
 
             # Try to load into different architecture (non-strict)
             # Shape mismatches still raise even with strict=False
-            new_model = Linear_QNet(11, 128, 3)
-            new_target = Linear_QNet(11, 128, 3)
+            new_model = QNet(11, 128, 3)
+            new_target = QNet(11, 128, 3)
             new_optimizer = torch.optim.Adam(new_model.parameters(), lr=0.001)
 
             with pytest.raises(RuntimeError, match="size mismatch"):
@@ -291,8 +291,8 @@ class TestCheckpointSaveLoad:
 
     def test_legacy_checkpoint_no_training_state(self):
         """Test loading legacy checkpoint without training_state."""
-        model = Linear_QNet(11, 64, 3)
-        target_model = Linear_QNet(11, 64, 3)
+        model = QNet(11, 64, 3)
+        target_model = QNet(11, 64, 3)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -313,8 +313,8 @@ class TestCheckpointSaveLoad:
                 path,
             )
 
-            new_model = Linear_QNet(11, 64, 3)
-            new_target = Linear_QNet(11, 64, 3)
+            new_model = QNet(11, 64, 3)
+            new_target = QNet(11, 64, 3)
             new_optimizer = torch.optim.Adam(new_model.parameters(), lr=0.001)
 
             loaded_state, loaded_config = load_checkpoint(
@@ -333,7 +333,7 @@ class TestModelOnlyCheckpoint:
 
     def test_save_load_weights_only(self):
         """Test save/load weights only."""
-        model = Linear_QNet(11, 64, 3)
+        model = QNet(11, 64, 3)
         model_config = ModelConfig(11, 64, 3, 0.1)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -341,7 +341,7 @@ class TestModelOnlyCheckpoint:
 
             save_model_only(path, model, model_config)
 
-            new_model = Linear_QNet(11, 64, 3)
+            new_model = QNet(11, 64, 3)
             loaded_config = load_model_only(path, new_model, torch.device("cpu"))
 
             # Verify weights match
@@ -416,7 +416,7 @@ class TestBackwardCompatibility:
 
     def test_agent_save_load_backward_compat(self):
         """Test Agent.save_checkpoint/load_checkpoint still work."""
-        from persistence import load_agent_checkpoint, save_agent_checkpoint
+        from snake_qdn import load_agent_checkpoint, save_agent_checkpoint
 
         agent = Agent(hidden_size=64, memory_size=1000, batch_size=32)
         agent.n_games = 42

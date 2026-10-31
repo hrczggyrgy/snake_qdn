@@ -11,7 +11,7 @@ import logging
 
 import streamlit as st
 
-from training import ActivityMode, TrainingController
+from snake_qdn import ActivityMode, TrainingController
 from ui.charts import render_score_chart
 from ui.controls import (
     render_manual_controls,
@@ -80,7 +80,7 @@ def init_ui_state():
         "show_activations": False,
         "show_grid": True,
         "max_burst_steps": 50,
-        "burst_time_budget": 0.2,  # Increased from 0.05 to allow multiple optimizer steps per burst
+        "burst_time_budget": 0.2,
         # Event tracking
         "last_event_id": 0,
     }
@@ -182,13 +182,13 @@ def create_execution_fragment():
                     st.markdown(event_html, unsafe_allow_html=True)
 
         with progress_col:
-            # Score Chart (main progress indicator) - recreated each render (faster than cached serialization)
+            # Score Chart (main progress indicator)
             fig_score = render_score_chart(
                 snapshot.recent_scores,
                 snapshot.recent_mean_scores,
                 snapshot.episode,
             )
-            
+
             if fig_score:
                 st.plotly_chart(
                     fig_score,
@@ -239,7 +239,7 @@ def inspect_learning_fragment():
     st.markdown("### 🔬 Inspect Learning")
 
     # State Vector
-    st.caption("State Representation (11D) — grouped by Danger / Direction / Food")
+    st.caption("State Representation (14D) — grouped by Danger / Direction / Food / Tail")
     from ui.charts import render_state_vector
 
     fig_sv = render_state_vector(snapshot.observation)
@@ -247,7 +247,7 @@ def inspect_learning_fragment():
         st.plotly_chart(
             fig_sv,
             width="stretch",
-            height=360,  # Explicit element height matching figure height
+            height=360,
             config={"displayModeBar": False},
             key="inspect_state_vector",
         )
@@ -272,7 +272,7 @@ def inspect_learning_fragment():
         st.plotly_chart(
             fig_q,
             width="stretch",
-            height=320,  # Explicit element height matching figure height
+            height=320,
             config={"displayModeBar": False},
             key="inspect_q_values",
         )
@@ -289,7 +289,7 @@ def inspect_learning_fragment():
             st.plotly_chart(
                 fig_net,
                 width="stretch",
-                height=360,  # Explicit element height matching figure height
+                height=360,
                 config={"displayModeBar": False},
                 key="inspect_network",
             )
@@ -314,6 +314,25 @@ def inspect_learning_fragment():
             st.plotly_chart(
                 fig_bellman, width="stretch", config={"displayModeBar": False}, key="inspect_bellman"
             )
+
+    # Phase banner
+    from snake_qdn.events import PhaseInfo
+    phase_info = PhaseInfo.from_controller(controller)
+    phase_colors = {
+        "warmup": "#ffaa00",
+        "exploring": "#00aaff",
+        "exploiting": "#00cc66",
+        "level-up": "#aa00ff",
+    }
+    color = phase_colors.get(phase_info.name, "#888888")
+    st.markdown(
+        f"""
+        <div style="padding: 8px; border-radius: 4px; background: {color}22; border-left: 4px solid {color}; margin-top: 8px;">
+            <strong>Phase:</strong> {phase_info.name.upper()} — {phase_info.description}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # =============================================================================

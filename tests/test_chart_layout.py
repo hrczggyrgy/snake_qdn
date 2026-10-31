@@ -186,7 +186,7 @@ def test_q_values_margins_sufficient_for_annotations():
 def test_network_activations_margins_sufficient():
     """Network activations chart should have sufficient margins for layer labels."""
 
-    from training import TrainingController
+    from snake_qdn import TrainingController
     from ui.charts import render_network_activations
 
     # Create a minimal controller and snapshot

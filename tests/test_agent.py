@@ -9,16 +9,16 @@ import numpy as np
 import pytest
 import torch
 
-from agent import Agent, ReplayMemory
-from snake_env import SnakeGameAI
+from snake_qdn import Agent, ReplayBuffer
+from snake_qdn import SnakeEnv
 
 
-class TestReplayMemory:
-    """Tests for ReplayMemory."""
+class TestReplayBuffer:
+    """Tests for ReplayBuffer."""
 
     def test_push_and_len(self):
         """Test pushing experiences and length."""
-        memory = ReplayMemory(capacity=1000)
+        memory = ReplayBuffer(capacity=1000)
 
         for _ in range(10):
             memory.push(
@@ -34,7 +34,7 @@ class TestReplayMemory:
 
     def test_sample_shapes_and_dtypes(self):
         """Test sample returns correct shapes and dtypes."""
-        memory = ReplayMemory(capacity=100)
+        memory = ReplayBuffer(capacity=100)
 
         for _ in range(50):
             memory.push(
@@ -64,7 +64,7 @@ class TestReplayMemory:
 
     def test_is_ready(self):
         """Test is_ready returns correct value."""
-        memory = ReplayMemory(capacity=100)
+        memory = ReplayBuffer(capacity=100)
         assert not memory.is_ready(32)
 
         for _ in range(32):
@@ -74,7 +74,7 @@ class TestReplayMemory:
 
     def test_sample_returns_terminated_truncated(self):
         """Test sample returns both terminated and truncated arrays."""
-        memory = ReplayMemory(capacity=100)
+        memory = ReplayBuffer(capacity=100)
 
         for _ in range(10):
             memory.push(np.random.randn(11), 0, 0.0, np.random.randn(11), True, False)
@@ -338,7 +338,7 @@ class TestTrainingIntegration:
     def test_train_agent_function(self):
         """Test train_agent function runs without error."""
 
-        env = SnakeGameAI(grid_size=10)
+        env = SnakeEnv(grid_size=10)
         agent = Agent(hidden_size=64, memory_size=1000, batch_size=32, epsilon_start=0.1)
 
         # Train for a few episodes
@@ -363,9 +363,9 @@ class TestTrainingIntegration:
 
     def test_evaluate_agent_function(self):
         """Test evaluate_agent function."""
-        from agent import evaluate_agent
+        from snake_qdn import evaluate_agent
 
-        env = SnakeGameAI(grid_size=10)
+        env = SnakeEnv(grid_size=10)
         agent = Agent(hidden_size=64, memory_size=1000, batch_size=32, epsilon_start=0.0)
 
         results = evaluate_agent(agent, env, n_episodes=2)

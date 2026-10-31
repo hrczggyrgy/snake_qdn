@@ -4,7 +4,7 @@ Control components: Primary toolbar, sidebar configuration forms.
 
 import streamlit as st
 
-from training import ActivityMode, AgentConfig, EnvConfig, TrainingController
+from snake_qdn import ActivityMode, AgentConfig, EnvConfig, TrainingController
 
 # =============================================================================
 # Primary Toolbar (Main Content Area)

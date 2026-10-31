@@ -7,15 +7,15 @@ from collections import deque
 import numpy as np
 import pytest
 
-from snake_env import SnakeGameAI
+from snake_qdn import SnakeEnv
 
 
 class TestSnakeEnvironment:
-    """Tests for SnakeGameAI environment."""
+    """Tests for SnakeEnv environment."""
 
     def test_reset_standard_grid(self):
         """Test reset works on standard grid."""
-        env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
+        env = SnakeEnv(grid_size=10, render_mode="rgb_array")
         obs, info = env.reset(seed=42)
 
         assert obs.shape == (11,), f"Expected obs shape (11,), got {obs.shape}"
@@ -25,7 +25,7 @@ class TestSnakeEnvironment:
 
     def test_step_basic(self):
         """Test basic step functionality."""
-        env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
+        env = SnakeEnv(grid_size=10, render_mode="rgb_array")
         obs, info = env.reset(seed=42)
 
         for _ in range(5):
@@ -42,7 +42,7 @@ class TestSnakeEnvironment:
 
     def test_render(self):
         """Test render returns valid RGB array."""
-        env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
+        env = SnakeEnv(grid_size=10, render_mode="rgb_array")
         env.reset()
 
         img = env.render()
@@ -54,7 +54,7 @@ class TestSnakeEnvironment:
 
     def test_minimum_grid_size_3x3(self):
         """Test minimum grid size (3x3) works."""
-        env = SnakeGameAI(grid_size=3, render_mode="rgb_array")
+        env = SnakeEnv(grid_size=3, render_mode="rgb_array")
         obs, info = env.reset(seed=42)
 
         assert obs.shape == (11,)
@@ -65,7 +65,7 @@ class TestSnakeEnvironment:
 
     def test_grid_size_4x4(self):
         """Test 4x4 grid works."""
-        env = SnakeGameAI(grid_size=4, render_mode="rgb_array")
+        env = SnakeEnv(grid_size=4, render_mode="rgb_array")
         obs, info = env.reset(seed=42)
 
         for seg in env.snake:
@@ -76,13 +76,13 @@ class TestSnakeEnvironment:
     def test_grid_size_below_3_raises(self):
         """Test grid_size < 3 raises ValueError."""
         with pytest.raises(ValueError, match="grid_size must be >= 3"):
-            SnakeGameAI(grid_size=2)
+            SnakeEnv(grid_size=2)
 
     def test_seed_reproducibility(self):
         """Test seed produces reproducible results."""
         # Create environments with seed, but don't call reset() again
-        env1 = SnakeGameAI(grid_size=10, seed=42)
-        env2 = SnakeGameAI(grid_size=10, seed=42)
+        env1 = SnakeEnv(grid_size=10, seed=42)
+        env2 = SnakeEnv(grid_size=10, seed=42)
 
         # The constructor already calls reset(), so we can just check the state
         obs1 = env1._get_observation()
@@ -97,7 +97,7 @@ class TestSnakeEnvironment:
 
     def test_wall_collision_terminated(self):
         """Test wall collision returns terminated=True."""
-        env = SnakeGameAI(grid_size=5)
+        env = SnakeEnv(grid_size=5)
         env.snake = deque([(0, 0), (1, 0), (2, 0)])
         env.direction = 2  # Left
         env.food = (4, 4)
@@ -112,7 +112,7 @@ class TestSnakeEnvironment:
 
     def test_self_collision_terminated(self):
         """Test self collision returns terminated=True."""
-        env = SnakeGameAI(grid_size=5)
+        env = SnakeEnv(grid_size=5)
         # Create a loop: head at (2,2), body at (2,1), (2,0), (1,0), (1,1), (1,2)
         env.snake = deque([(2, 2), (2, 1), (2, 0), (1, 0), (1, 1), (1, 2)])
         env.direction = 3  # Up
@@ -127,7 +127,7 @@ class TestSnakeEnvironment:
 
     def test_food_eating_reward(self):
         """Test eating food gives food_reward."""
-        env = SnakeGameAI(grid_size=5, food_reward=10.0)
+        env = SnakeEnv(grid_size=5, food_reward=10.0)
         env.snake = deque([(2, 2), (1, 2), (0, 2)])
         env.direction = 0  # Right
         env.food = (3, 2)  # Right next to head
@@ -143,7 +143,7 @@ class TestSnakeEnvironment:
 
     def test_timeout_returns_truncated(self):
         """Test timeout returns truncated=True, not terminated."""
-        env = SnakeGameAI(grid_size=10, step_penalty=0.0, food_reward=0.0, death_penalty=-1.0)
+        env = SnakeEnv(grid_size=10, step_penalty=0.0, food_reward=0.0, death_penalty=-1.0)
         env.reset()
         env.max_steps_without_food = 3
         env.food = (9, 9)  # Far away
@@ -165,7 +165,7 @@ class TestSnakeEnvironment:
 
     def test_full_board_victory(self):
         """Test filling board results in terminated=True (victory)."""
-        env = SnakeGameAI(grid_size=3)
+        env = SnakeEnv(grid_size=3)
 
         # Fill board except one cell
         env.snake = deque([(1, 0), (2, 0), (2, 1), (1, 1), (0, 1), (0, 2), (1, 2), (2, 2)])
@@ -185,7 +185,7 @@ class TestSnakeEnvironment:
 
     def test_food_none_observation(self):
         """Test Food=None produces all-zero food direction observations."""
-        env = SnakeGameAI(grid_size=3)
+        env = SnakeEnv(grid_size=3)
         env.food = None
         obs = env._get_observation()
 
@@ -199,7 +199,7 @@ class TestSnakeEnvironment:
 
     def test_game_over_state(self):
         """Test game over state returns zero reward, terminated=True."""
-        env = SnakeGameAI(grid_size=10)
+        env = SnakeEnv(grid_size=10)
         env.game_over = True
 
         obs, reward, terminated, truncated, info = env.step(0)
@@ -212,7 +212,7 @@ class TestSnakeEnvironment:
 
     def test_observation_structure(self):
         """Test observation has correct structure."""
-        env = SnakeGameAI(grid_size=10)
+        env = SnakeEnv(grid_size=10)
         env.reset()
         obs = env._get_observation()
 
@@ -233,7 +233,7 @@ class TestSnakeEnvironment:
 
     def test_get_state_for_display(self):
         """Test get_state_for_display returns complete state."""
-        env = SnakeGameAI(grid_size=10)
+        env = SnakeEnv(grid_size=10)
         env.reset()
 
         state = env.get_state_for_display()
@@ -252,8 +252,8 @@ class TestSnakeEnvironment:
     def test_rng_isolation_independent_environments(self):
         """Test that two environments with same seed produce identical sequences."""
         # Create environments and step them identically
-        env1 = SnakeGameAI(grid_size=10, seed=42)
-        env2 = SnakeGameAI(grid_size=10, seed=42)
+        env1 = SnakeEnv(grid_size=10, seed=42)
+        env2 = SnakeEnv(grid_size=10, seed=42)
 
         # The constructor already calls reset(), so initial states should match
         assert list(env1.snake) == list(env2.snake)
@@ -281,8 +281,8 @@ class TestSnakeEnvironment:
 
     def test_rng_isolation_no_cross_contamination(self):
         """Test that using one environment doesn't affect another's RNG state."""
-        env1 = SnakeGameAI(grid_size=10, seed=100)
-        env2 = SnakeGameAI(grid_size=10, seed=200)
+        env1 = SnakeEnv(grid_size=10, seed=100)
+        env2 = SnakeEnv(grid_size=10, seed=200)
 
         # Step env1 a few times
         for _ in range(10):
@@ -295,8 +295,8 @@ class TestSnakeEnvironment:
             env2.step(action)
 
         # Create new environments with same seeds - they should match original states
-        env1_ref = SnakeGameAI(grid_size=10, seed=100)
-        env2_ref = SnakeGameAI(grid_size=10, seed=200)
+        env1_ref = SnakeEnv(grid_size=10, seed=100)
+        env2_ref = SnakeEnv(grid_size=10, seed=200)
 
         for _ in range(10):
             action = env1_ref._rng.randint(0, 2)
@@ -320,8 +320,8 @@ class TestSnakeEnvironment:
     def test_reset_with_seed_reproducibility(self):
         """Test that reset(seed=X) produces reproducible initial state."""
         # Create environment without seed, then reset with seed
-        env1 = SnakeGameAI(grid_size=10)
-        env2 = SnakeGameAI(grid_size=10)
+        env1 = SnakeEnv(grid_size=10)
+        env2 = SnakeEnv(grid_size=10)
 
         obs1, info1 = env1.reset(seed=999)
         obs2, info2 = env2.reset(seed=999)
@@ -350,7 +350,7 @@ class TestSnakeEnvironment:
         foods = []
 
         for seed in seeds:
-            env = SnakeGameAI(grid_size=20, seed=seed)  # 20x20 = 400 cells, snake=3, 397 available
+            env = SnakeEnv(grid_size=20, seed=seed)  # 20x20 = 400 cells, snake=3, 397 available
             foods.append(env.food)
             env.close()
 

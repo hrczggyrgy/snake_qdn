@@ -6,7 +6,7 @@ from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
-from snake_env import SnakeGameAI
+from snake_qdn import SnakeEnv
 
 
 def assert_clean(app):
@@ -69,7 +69,7 @@ def main():
         assert_clean(app)
 
     # Test environment rendering works
-    env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
+    env = SnakeEnv(grid_size=10, render_mode="rgb_array")
     try:
         observation, _ = env.reset(seed=42)
         state = env.get_state_for_display()

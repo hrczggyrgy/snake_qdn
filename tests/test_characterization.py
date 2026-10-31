@@ -13,16 +13,16 @@ from collections import deque
 import numpy as np
 import torch
 
-from agent import Agent, ReplayMemory
-from model import Linear_QNet, QTrainer
-from snake_env import SnakeGameAI
+from snake_qdn import Agent, ReplayBuffer
+from snake_qdn import QNet, QTrainer
+from snake_qdn import SnakeEnv
 
 
 def test_train_evaluate_manual_pause_resume_single_step():
     """Test the five activity modes and control transitions."""
     print("Testing Train/Evaluate/Manual/Pause/Resume/Step...")
 
-    env = SnakeGameAI(grid_size=10)
+    env = SnakeEnv(grid_size=10)
     agent = Agent(hidden_size=64, memory_size=1000, batch_size=32, epsilon_start=0.0)
 
     # Train mode - agent learns
@@ -71,7 +71,7 @@ def test_terminal_truncated_bootstrap():
     """Test terminal transitions suppress bootstrap; truncation retains it."""
     print("Testing Terminal vs Truncated Bootstrap...")
 
-    model = Linear_QNet(input_size=11, hidden_size=64, output_size=3)
+    model = QNet(input_size=11, hidden_size=64, output_size=3)
     trainer = QTrainer(model, lr=0.001, gamma=0.9, device="cpu")
 
     # Test the target computation formula directly (no gradients needed)
@@ -108,7 +108,7 @@ def test_epsilon_decay_once_per_episode_not_during_eval():
     """Test epsilon decays once per completed training episode, not during evaluation."""
     print("Testing Epsilon Decay Semantics...")
 
-    env = SnakeGameAI(grid_size=10)
+    env = SnakeEnv(grid_size=10)
     agent = Agent(
         hidden_size=64,
         memory_size=1000,
@@ -172,7 +172,7 @@ def test_epsilon_logging_update_order():
     # The discrepancy was that train_agent() logs epsilon AFTER decay in epsilon_history
     # while dashboard reads agent.epsilon_history which already has the decayed value
 
-    env = SnakeGameAI(grid_size=10)
+    env = SnakeEnv(grid_size=10)
     agent = Agent(hidden_size=64, epsilon_start=1.0, epsilon_decay=0.5)
 
     # Simulate train_agent() behavior
@@ -204,7 +204,7 @@ def test_board_restart_history_reset_new_run():
     """Test board restart, history reset, and new run behavior."""
     print("Testing Board Restart / History Reset / New Run...")
 
-    env = SnakeGameAI(grid_size=10)
+    env = SnakeEnv(grid_size=10)
     agent = Agent(hidden_size=64, memory_size=1000, batch_size=32)
 
     # Play a bit to build history
@@ -325,7 +325,7 @@ def test_zero_loss_recorded_not_discarded():
     """Test that zero-valued loss is recorded, not discarded by truthiness checks."""
     print("Testing Zero Loss Recording...")
 
-    model = Linear_QNet(input_size=11, hidden_size=64, output_size=3)
+    model = QNet(input_size=11, hidden_size=64, output_size=3)
     trainer = QTrainer(model, lr=0.001, gamma=0.99, device="cpu")
 
     # Force a zero loss scenario by making prediction = target
@@ -373,7 +373,7 @@ def test_food_none_full_board_victory_small_grids_game_over():
     print("Testing Edge Cases: Food=None, Victory, Small Grids, Game Over...")
 
     # Full board victory (3x3 grid)
-    env = SnakeGameAI(grid_size=3)
+    env = SnakeEnv(grid_size=3)
     env.snake = deque([(1, 0), (2, 0), (2, 1), (1, 1), (0, 1), (0, 2), (1, 2), (2, 2)])
     env.direction = 2  # Left
     env.food = (0, 0)
@@ -395,7 +395,7 @@ def test_food_none_full_board_victory_small_grids_game_over():
     env.close()
 
     # Small grid (3x3 minimum)
-    env = SnakeGameAI(grid_size=3)
+    env = SnakeEnv(grid_size=3)
     obs, info = env.reset()
     assert obs.shape == (11,)
     for seg in env.snake:
@@ -405,13 +405,13 @@ def test_food_none_full_board_victory_small_grids_game_over():
 
     # Grid size < 3 raises error
     try:
-        SnakeGameAI(grid_size=2)
+        SnakeEnv(grid_size=2)
         raise AssertionError("Should have raised ValueError for grid_size < 3")
     except ValueError as e:
         print(f"  ✓ Grid size < 3 correctly rejected: {e}")
 
     # Game over state - step returns zero reward, terminated=True
-    env = SnakeGameAI(grid_size=10)
+    env = SnakeEnv(grid_size=10)
     env.game_over = True
     obs, reward, terminated, truncated, info = env.step(0)
     assert reward == 0.0
@@ -424,10 +424,10 @@ def test_food_none_full_board_victory_small_grids_game_over():
 
 
 def test_replay_memory_sample_compatibility():
-    """Test ReplayMemory.sample compatibility with supported Python version."""
-    print("Testing ReplayMemory.sample Compatibility...")
+    """Test ReplayBuffer.sample compatibility with supported Python version."""
+    print("Testing ReplayBuffer.sample Compatibility...")
 
-    memory = ReplayMemory(capacity=100)
+    memory = ReplayBuffer(capacity=100)
 
     # Add varied experiences
     for _ in range(50):
@@ -463,7 +463,7 @@ def test_replay_memory_sample_compatibility():
     assert memory.is_ready(batch_size)
     print("  ✓ is_ready works correctly")
 
-    print("  ✓ ReplayMemory compatibility test passed!\n")
+    print("  ✓ ReplayBuffer compatibility test passed!\n")
 
 
 def test_probability_helpers_no_mutation():
@@ -482,7 +482,7 @@ def test_probability_helpers_no_mutation():
     print("  ✓ probabilities_from_q_values doesn't mutate input")
 
     # Test get_action_probabilities
-    model = Linear_QNet(input_size=11, hidden_size=64, output_size=3)
+    model = QNet(input_size=11, hidden_size=64, output_size=3)
     trainer = QTrainer(model, device="cpu")
 
     state = np.random.randn(11).astype(np.float32)
@@ -502,7 +502,7 @@ def test_rendering_unchanged_data_repeated_runs_controls():
     """Test rendering after unchanged data, repeated full runs, and control interactions."""
     print("Testing Rendering Stability...")
 
-    env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
+    env = SnakeEnv(grid_size=10, render_mode="rgb_array")
     env.reset()
 
     # First render

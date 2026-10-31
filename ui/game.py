@@ -5,7 +5,7 @@ Game rendering components: board, decision strip, event feed, outcome summary.
 import plotly.graph_objects as go
 import streamlit as st
 
-from training import TrainingSnapshot
+from snake_qdn import TrainingSnapshot
 from ui.styles import (
     ACTION_NAMES,
     ACTION_NAMES_SHORT,

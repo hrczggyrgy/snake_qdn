@@ -10,7 +10,7 @@ This test verifies that when a training episode ends:
 5. Epsilon decays exactly once (not again during reset)
 """
 
-from training import ActivityMode, TrainingController
+from snake_qdn import ActivityMode, TrainingController
 
 
 def test_auto_episode_continuation_watch_mode():

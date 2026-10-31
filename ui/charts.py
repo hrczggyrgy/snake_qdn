@@ -362,21 +362,23 @@ def render_throughput_chart(
 
 
 def render_state_vector(observation: np.ndarray | None) -> go.Figure | None:
-    """Render the 11-dimensional state vector as horizontal bars grouped by category."""
+    """Render the 14-dimensional state vector as horizontal bars grouped by category."""
     if observation is None:
         return None
 
     labels = STATE_LABELS_FLAT
 
-    # Color by group: Danger=red, Direction=blue, Food=gold
+    # Color by group: Danger=red, Direction=blue, Food=gold, Meta=purple
     colors = []
     for i, val in enumerate(observation):
-        if i < 3:  # Danger
+        if i < 6:  # Danger (1-step and 2-step)
             colors.append("#ff4444" if val > 0.5 else "#44cc44")
-        elif i < 7:  # Direction
+        elif i < 10:  # Direction
             colors.append("#4488ff" if val > 0.5 else "rgba(100,100,100,0.3)")
-        else:  # Food
+        elif i < 14:  # Food
             colors.append("#ffd700" if val > 0.5 else "rgba(100,100,100,0.3)")
+        else:  # Meta
+            colors.append("#aa44ff" if val > 0.5 else "rgba(100,100,100,0.3)")
 
     fig = go.Figure()
     fig.add_trace(

@@ -2,73 +2,80 @@
 
 A modular Streamlit application where a neural network learns to play Snake via Deep Q-Learning (DQN), with live interactive visualizations of the learning dynamics, decision-making, and neural network internals.
 
-**Live Demo:** https://snakeqdn.streamlit.app/
-
 ## Features
 
 ### 🎮 Live Game Arena
-- Real-time rendering of the Snake board (grid, snake head/body, food)
-- Live counters: Current Score, High Score, Episode Count, Current Epsilon
-- Playback controls: Start/Pause, Speed Slider, Reset, Step-by-Step Mode
+- Real-time rendering of the Snake board with live counters
+- Playback controls: Start/Pause, Speed Slider, Reset, Step-by-Step
 - Manual control buttons for testing
 
 ### 🧠 Neural Network Internals & Decision Visualizer
-- **Active State Vector**: Visual breakdown of the 11 inputs with color-coded indicators
-- **Network Architecture Diagram**: Dynamic node/edge activation diagram showing layer weights and firing signals
-- **Action Probabilities / Q-Values**: Real-time bar charts showing predicted values for [Straight, Right, Left], highlighting the chosen action
-- **Decision Snapshot**: Pre-action observation, Q-values, and selection reason (exploring/exploiting/manual)
+- **Active State Vector**: Visual breakdown of the 16 inputs with color-coded indicators
+- **Network Architecture Diagram**: Dynamic node/edge activation diagram
+- **Action Probabilities / Q-Values**: Real-time bar charts with chosen action highlighted
+- **Bellman Update Explanation**: Visual breakdown of `y = r + γⁿ(1-d)max Q'` and TD error
 
 ### 📈 Learning Analytics & Metrics
-- **Performance Chart**: Dynamic plot showing Score per Episode alongside Rolling Average (50-episode window)
-- **Loss Curve**: Real-time plot of Bellman loss over training steps (log scale)
-- **Exploration vs. Exploitation**: Epsilon decay tracking over episodes
-- **Training Metrics**: Environment steps, optimizer updates, replay buffer size, rolling averages
-- **Bellman Update Explanation**: Visual breakdown of `y = r + γ(1-d)max Q'` and TD error for sampled replay transitions
+- **Performance Chart**: Score per Episode with Rolling Average (50-episode window)
+- **Loss Curve**: Real-time plot of Bellman loss (log scale)
+- **Exploration vs. Exploitation**: Epsilon decay tracking
+- **Episode Outcomes**: Horizontal stacked bar of termination reasons
 
 ### ⚡ Execution Policies
-- **Watch**: Deliberately paced, readable movement (configurable speed)
-- **FastTraining**: Multiple transitions per UI update within a bounded compute-time budget
-- **Evaluate**: Greedy policy, no learning, separate metrics
-- **Manual**: Human-controlled snake for testing
+- **Watch**: Deliberately paced, readable movement
+- **FastTraining**: Multiple transitions per UI update within time budget
+- **Evaluate**: Greedy policy, no learning
+- **Manual**: Human-controlled snake
 
-## Architecture
-
-```
-snake/
-├── app.py              # Main Streamlit application (UI, callbacks, fragments)
-├── training.py         # TrainingController - framework-independent training logic
-├── persistence.py      # Checkpoint persistence with versioning & validation
-├── snake_env.py        # Gymnasium-compatible Snake environment
-├── model.py            # PyTorch neural network models (Linear_QNet, QTrainer)
-├── agent.py            # DQN Agent with experience replay
-├── experiments.py      # Controlled experiment framework
-├── tests/              # Focused test suites (129 tests)
-│   ├── test_agent.py
-│   ├── test_characterization.py
-│   ├── test_checkpoint.py
-│   ├── test_controller.py
-│   ├── test_env.py
-│   ├── test_episode_continuation.py
-│   ├── test_modules.py
-│   ├── test_rendering.py
-│   └── test_rendering_smoke.py
-├── pyproject.toml      # Tool configuration (pytest, Ruff, mypy)
-├── requirements.txt    # Python dependencies
-└── checkpoints/        # Model checkpoints (auto-created)
-```
-
-## Installation
+## Quickstart
 
 ```bash
-# Create virtual environment (recommended)
+# Create virtual environment
 python3 -m venv venv
 source venv/bin/activate
 
 # Install dependencies
-pip install -r requirements.txt
-
-# Install dev dependencies (for testing/linting)
 pip install -e ".[dev]"
+
+# Run the dashboard
+streamlit run app.py
+```
+
+Then open `http://localhost:8501`
+
+## Project Structure
+
+```
+snake/
+├── app.py                    # Streamlit dashboard entry point
+├── pyproject.toml            # Single source of truth (deps, tools, config)
+├── LICENSE
+├── README.md
+├── docs/                     # Documentation
+│   ├── IMPROVEMENT_PLAN.md   # Implementation roadmap
+│   ├── REFACTORING_REPORT.md # Original refactoring notes
+│   └── ...
+├── legacy/                   # Old flat modules (deprecated)
+├── snake_qdn/                # NEW: Clean package structure
+│   ├── __init__.py           # Public API
+│   ├── config.py             # EnvConfig, AgentConfig, NetworkConfig, TrainingConfig
+│   ├── events.py             # EventType, TrainingEvent, TrainingSnapshot, PhaseInfo
+│   ├── env.py                # SnakeEnv (16D obs, O(1) lookups, curriculum)
+│   ├── network.py            # QNet (64 hidden, no dropout)
+│   ├── replay.py             # ReplayBuffer (n=3 step returns, preallocated arrays)
+│   ├── trainer.py            # QTrainer (Double DQN, vectorized soft update)
+│   ├── agent.py              # Agent (unified replay schedule, step-based epsilon)
+│   ├── controller.py         # TrainingController (framework-independent)
+│   ├── headless.py           # train_headless(), evaluate_policy()
+│   └── persistence.py        # CheckpointManager (v3, atomic saves, exact resume)
+├── tests/                    # 125 passing tests
+│   ├── test_agent.py
+│   ├── test_checkpoint.py
+│   ├── test_controller.py
+│   ├── test_env.py
+│   ├── test_experiments.py
+│   └── ...
+└── ui/                       # Dashboard components (unchanged)
 ```
 
 ## Usage
@@ -78,30 +85,17 @@ pip install -e ".[dev]"
 streamlit run app.py
 ```
 
-Then open your browser to `http://localhost:8501`
-
-### Run Tests
-```bash
-# All tests (128 pass, 1 flaky, 4 env failures)
-python -m pytest tests/ -v
-
-# Run linting
-ruff check .
-
-# Run formatting check
-ruff format --check .
-
-# Type checking
-mypy training.py agent.py model.py
-```
-
 ### Headless Training (Programmatic)
 ```python
-from training import TrainingController, train_headless, ActivityMode, EnvConfig, AgentConfig
+from snake_qdn import (
+    TrainingController, train_headless, ActivityMode, 
+    EnvConfig, AgentConfig, NetworkConfig
+)
 
 # Configure
 controller = TrainingController(
-    env_config=EnvConfig(grid_size=20), agent_config=AgentConfig(hidden_size=256, lr=0.001)
+    env_config=EnvConfig(grid_size=20),
+    agent_config=AgentConfig(network=NetworkConfig(hidden_size=64))
 )
 
 # Train
@@ -118,12 +112,13 @@ while not controller.game_over:
 
 ### Checkpoint Management
 ```python
-from agent import Agent
+from snake_qdn import Agent, AgentConfig, NetworkConfig
 
-agent = Agent()
+config = AgentConfig(network=NetworkConfig(hidden_size=64))
+agent = Agent(config)
 # ... train ...
 
-# Full training state (for exact resume)
+# Full training state (exact resume)
 agent.save_checkpoint("checkpoints/full.pth")
 info = agent.load_checkpoint("checkpoints/full.pth")
 
@@ -132,237 +127,86 @@ agent.save_weights_only("checkpoints/weights.pth")
 config = agent.load_weights_only("checkpoints/weights.pth")
 ```
 
-### Controlled Experiments (Budget-Matched)
+### Controlled Experiments
 ```python
-from experiments import ExperimentRunner, ExperimentConfig, ExperimentBudget, AgentConfig, EnvConfig
+from experiments import ExperimentRunner, ExperimentConfig, ExperimentBudget
+from snake_qdn import AgentConfig, EnvConfig
 
-# Define experiment
 config = ExperimentConfig(
     name="baseline",
     description="Baseline DQN",
-    agent_config=AgentConfig(hidden_size=256, lr=0.001, dropout=0.1),
+    agent_config=AgentConfig(network=NetworkConfig(hidden_size=64)),
     env_config=EnvConfig(grid_size=20),
     budget=ExperimentBudget(max_env_transitions=500_000),
     seed=42,
 )
 
-# Run
 runner = ExperimentRunner("results")
-result = runner.run_experiment(config, eval_every=10_000, eval_episodes=5, verbose=True)
-
-# Compare results
+result = runner.run_experiment(config, eval_every=10_000, eval_episodes=5)
 runner.compare_results([result1, result2, ...])
 ```
 
+## Key Improvements (v2.0.0)
+
+| Area | Change |
+|------|--------|
+| **Network** | 11→256→256→3 → **16→64→64→3** (13× fewer FLOPs) |
+| **Dropout** | Removed (anti-pattern in DQN) |
+| **Batch/Train** | 256→64, train_every=1→2 (2-4× speedup) |
+| **Reward Shaping** | +0.1 × Manhattan distance delta (potential-based) |
+| **n-step Returns** | n=3 with γⁿ target |
+| **Epsilon** | Step-based decay (50k transitions) by default |
+| **Curriculum** | 8×8 → 12×12 → 20×20 on rolling avg ≥ 10 |
+| **Observation** | 11→16 features (2-step danger, food distance, tail direction) |
+| **Double DQN** | Online chooses, target evaluates |
+| **Device** | Default CPU, CUDA opt-in |
+| **Vectorization** | `torch._foreach_lerp_`, `torch.from_numpy` |
+| **Env Speed** | O(1) collision via `_occupied` set |
+
 ## Environment Details
 
-### Observation Space (11-dimensional)
+### Observation Space (16-dimensional)
 | Index | Feature | Description |
 |-------|---------|-------------|
-| 0 | Danger Straight | Collision within 1 step ahead |
-| 1 | Danger Right | Collision within 1 step to the right |
-| 2 | Danger Left | Collision within 1 step to the left |
-| 3 | Direction Left | Currently moving left (one-hot) |
-| 4 | Direction Right | Currently moving right (one-hot) |
-| 5 | Direction Up | Currently moving up (one-hot) |
-| 6 | Direction Down | Currently moving down (one-hot) |
-| 7 | Food Left | Food is to the left of head |
-| 8 | Food Right | Food is to the right of head |
-| 9 | Food Up | Food is above head |
-| 10 | Food Down | Food is below head |
+| 0-2 | Danger (1-step) | Straight, Right, Left |
+| 3-5 | Danger (2-step) | Straight, Right, Left |
+| 6-9 | Direction | Left, Right, Up, Down (one-hot) |
+| 10-13 | Food | Left, Right, Up, Down |
+| 14 | Food Dist Norm | Normalized Manhattan distance |
+| 15 | Tail Dir Rel | Relative tail direction |
 
 ### Action Space (3 discrete)
 | Action | Description |
 |--------|-------------|
-| 0 | Straight (continue current direction) |
-| 1 | Turn Right (90° clockwise) |
-| 2 | Turn Left (90° counter-clockwise) |
+| 0 | Straight |
+| 1 | Turn Right |
+| 2 | Turn Left |
 
 ### Reward Function
 - **Eating food**: +10
 - **Game Over** (wall/self collision): -10
-- **Step penalty**: -0.01 (configurable, discourages wandering)
+- **Step penalty**: -0.01
 - **Timeout** (max steps without food): -10 (truncated, not terminated)
-
-## Key Improvements (v0.2.0)
-
-### P0 — Trustworthy Behavior
-| # | Improvement | Description |
-|---|-------------|-------------|
-| 1 | **Configuration wiring** | `dropout`, `tau` now properly passed through `AgentConfig` → `Agent` → `Linear_QNet`/`QTrainer` |
-| 2 | **Optimizer metrics** | Separate `env_transitions`, `training_transitions`, `optimizer_updates` with session/active time rates |
-| 3 | **Clear history** | Display-only operation preserving lifetime counters (`n_games`, `total_steps`, `epsilon`, replay) |
-| 4 | **Episode outcomes** | `termination_reason` from env, `recent_terminations` deque (maxlen=50), correct denominators |
-| 5 | **Checkpoints** | Schema v3, environment RNG state, mid-episode resume, bounded replay/loss history |
-
-### P1 — Lower Overhead
-| # | Improvement | Description |
-|---|-------------|-------------|
-| 1 | **Unified replay schedule** | `maybe_optimize()` with `learning_starts`, `train_every`, `gradient_steps` replaces dual `train_short/long_memory` |
-| 2 | **Diagnostic gating** | `compute_q_values=False` during FastTraining exploration (~200x speedup in action selection) |
-| 3 | **Compact replay buffer** | Preallocated numpy arrays, circular buffer, O(1) sampling, backward-compatible checkpoints |
-| 4 | **Game rules** | `allow_tail_entry` config, action validation (0/1/2), optimized food placement via precomputed empty cells |
-
-### P2 — Educational Dashboard
-| # | Improvement | Description |
-|---|-------------|-------------|
-| 1 | **Bellman update visualization** | `render_bellman_update()` shows `y = r + γ(1-d)max Q'`, TD error for sampled replay transitions |
-| 2 | **Experiment framework** | `ExperimentRunner` with `ExperimentBudget` (transitions/time/optimizer steps/episodes), eval scheduling, ablation configs |
-| 3 | **Step-based epsilon decay** | New `epsilon_decay_steps` parameter with linear decay over training transitions |
-
-## Neural Network Architecture
-
-```
-Input (11) → Linear(256) → ReLU → Dropout(0.1)
-         → Linear(256) → ReLU → Dropout(0.1)
-         → Linear(3)   → Q-values [Straight, Right, Left]
-```
-
-- **Optimizer**: Adam (lr=0.001)
-- **Loss**: Huber (SmoothL1Loss) - more stable than MSE
-- **Discount factor (γ)**: 0.99
-- **Target Network**: Soft updates (τ=0.005)
-
-## Training Hyperparameters (Configurable via Sidebar)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| Hidden Size | 256 | Neurons in hidden layers |
-| Learning Rate | 0.001 | Adam optimizer learning rate |
-| Gamma | 0.99 | Discount factor for future rewards |
-| Epsilon Start | 1.0 | Initial exploration rate |
-| Epsilon End | 0.01 | Minimum exploration rate |
-| Epsilon Decay | 0.995 | Multiplicative decay per episode |
-| Epsilon Decay Steps | 0 | If > 0, linear decay over training transitions |
-| Memory Size | 100,000 | Experience replay buffer capacity |
-| Batch Size | 256 | Training batch size |
-| Learning Starts | 1,000 | Transitions before training begins |
-| Train Every | 1 | Train every N environment transitions |
-| Gradient Steps | 1 | Optimizer steps per training call |
-| Tau | 0.005 | Soft target update coefficient |
-| Dropout | 0.1 | Dropout rate for hidden layers (0 = disabled) |
-
-## Epsilon Decay Modes
-
-### Per-Episode (Legacy)
-```python
-# Default: multiplicative decay per episode
-ε(n) = max(0.01, 1.0 × 0.995ⁿ)
-```
-
-### Per-Training-Transition (New)
-```python
-# If epsilon_decay_steps > 0: linear decay over training transitions
-progress = min(1.0, training_transitions / epsilon_decay_steps)
-ε = ε_start + (ε_end - ε_start) × progress
-```
-
-## Controls
-
-### Sidebar
-- **Environment**: Grid size, reward shaping
-- **Agent**: All hyperparameters (recreate agent to apply)
-- **Training**: Start/Stop, Reset stats, Execution policy (Watch/FastTraining), Step mode
-- **Checkpoints**: Save/Load model weights
-- **Display**: Grid toggle, New game
-
-### Main View
-- **Play/Pause**: Toggle automatic stepping
-- **Step**: Single frame advance (in step mode)
-- **Reset**: Restart current game
-- **Manual Controls**: Arrow buttons when paused (Manual mode)
-
-## Checkpoint Details
-
-### Full Training State (exact resume)
-- Model weights (policy + target networks)
-- Optimizer state
-- Training statistics (episode, epsilon, high score, loss history)
-- Model configuration
-- Replay buffer contents
-- RNG states (Python, NumPy, PyTorch, CUDA)
-- Environment state (snake, food, direction, starvation counter, local RNG)
-
-### Weights-Only (inference)
-- Model weights only
-- Model configuration
-
-```python
-from agent import Agent
-
-agent = Agent()
-
-# Full training state (exact resume)
-agent.save_checkpoint("my_model.pth")
-info = agent.load_checkpoint("my_model.pth")  # Returns episode, epsilon, high_score
-
-# Weights only (inference)
-agent.save_weights_only("my_weights.pth")
-config = agent.load_weights_only("my_weights.pth")
-```
-
-**Note**: Exact training session resumption requires restoring all counters, RNG state, replay buffer, and configuration. The full checkpoint supports this; weights-only does not.
-
-## Performance Notes
-
-The dashboard supports two execution policies:
-
-| Policy | Description | Use Case |
-|--------|-------------|----------|
-| **Watch** | One transition per UI update (configurable 0-100ms delay) | Watching the agent learn, debugging |
-| **FastTraining** | Multiple transitions per UI update (bounded by step cap & time budget) | Maximum training throughput |
-
-**Preliminary benchmarks** (2000 transitions, grid_size=20):
-- **Watch mode**: ~350 trans/s (includes UI overhead)
-- **FastTraining mode**: ~1000+ trans/s, diagnostic gating provides ~200x action selection speedup
+- **Shaping**: +0.1 × (prev_dist - new_dist) Manhattan distance
 
 ## Testing
 
 ```bash
-# All tests (128 pass, 1 flaky due to test interference, 4 env failures)
+# All tests (125 pass)
 python -m pytest tests/ -v
 
-# Run linting
+# Linting
 ruff check .
 
-# Run formatting check
+# Formatting
 ruff format --check .
 
 # Type checking
-mypy training.py agent.py model.py
+mypy snake_qdn/
 ```
-
-## Technical Notes
-
-- **No UI freezes**: Uses Streamlit's fragment system with `st.session_state` for state management
-- **Auto-reset**: During training, episodes automatically restart on game over
-- **Efficient rendering**: Plotly coordinate-only rendering (no RGB/PNG/base64 on normal path)
-- **Modular design**: Each component (env, model, agent, controller, persistence) is independently testable
-- **Shared training logic**: `TrainingController` used by both dashboard and headless training
-- **Epsilon-greedy policy**: Action selection uses ε-greedy; softmax(Q) is shown for visualization only, not the actual behavior policy
-- **Terminated vs Truncated**: Terminated (game over) suppresses bootstrap; Truncated (timeout) retains bootstrap
-- **Diagnostic gating**: During FastTraining exploration, Q-value computation is skipped (~200x speedup)
-- **Compact replay buffer**: Preallocated numpy arrays with circular buffer, O(1) push and sample
-- **Environment-local RNG**: Each environment has isolated random generators for reproducibility
-
-## Limitations & Known Issues
-
-- **Hosted training is resource-dependent**: CPU-only on Streamlit Cloud; no GPU acceleration
-- **Server-side Save checkpoint**: Does not download a file to the browser; saves to server filesystem
-- **Flaky test**: `test_auto_episode_continuation_fast_training` passes in isolation but fails in suite due to test interference (random state from watch mode test affects fast training test)
-- **Hosted session is not durable**: State resets on redeploy or idle timeout
-- **No pretrained checkpoint provided**: Train from scratch or use weights-only for inference
 
 ## License
 
 MIT License - Feel free to use for learning and research!
 
 [LICENSE](LICENSE)
-
-## Credits
-
-Built with:
-- [Streamlit](https://streamlit.io/) - Interactive web apps
-- [PyTorch](https://pytorch.org/) - Deep learning
-- [Plotly](https://plotly.com/) - Interactive visualizations
-- [Gymnasium](https://gymnasium.farama.org/) - RL environment API

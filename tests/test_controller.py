@@ -5,7 +5,7 @@ Tests for the TrainingController.
 import numpy as np
 import pytest
 
-from training import ActivityMode, AgentConfig, EnvConfig, TrainingController
+from snake_qdn import ActivityMode, AgentConfig, EnvConfig, TrainingController
 
 
 class TestTrainingController:
@@ -414,7 +414,7 @@ class TestHeadlessTraining:
 
     def test_train_headless(self):
         """Test train_headless function."""
-        from training import train_headless
+        from snake_qdn import train_headless
 
         controller = TrainingController()
         # Use small config for fast test
@@ -431,7 +431,7 @@ class TestHeadlessTraining:
 
     def test_evaluate_headless(self):
         """Test evaluate_headless function."""
-        from training import evaluate_headless
+        from snake_qdn import evaluate_headless
 
         controller = TrainingController()
         controller.update_agent_config(

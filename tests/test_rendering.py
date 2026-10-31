@@ -7,8 +7,8 @@ from collections import deque
 import numpy as np
 import pytest
 
-from agent import Agent
-from snake_env import SnakeGameAI
+from snake_qdn import Agent
+from snake_qdn import SnakeEnv
 
 
 class TestEnvironmentRendering:
@@ -16,7 +16,7 @@ class TestEnvironmentRendering:
 
     def test_render_rgb_array(self):
         """Test render returns RGB array."""
-        env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
+        env = SnakeEnv(grid_size=10, render_mode="rgb_array")
         env.reset()
 
         frame = env.render()
@@ -29,7 +29,7 @@ class TestEnvironmentRendering:
 
     def test_render_deterministic(self):
         """Test render is deterministic for same state."""
-        env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
+        env = SnakeEnv(grid_size=10, render_mode="rgb_array")
         env.reset(seed=42)
 
         frame1 = env.render()
@@ -41,7 +41,7 @@ class TestEnvironmentRendering:
 
     def test_render_changes_after_step(self):
         """Test render changes after environment step."""
-        env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
+        env = SnakeEnv(grid_size=10, render_mode="rgb_array")
         env.reset(seed=42)
 
         frame1 = env.render()
@@ -54,7 +54,7 @@ class TestEnvironmentRendering:
 
     def test_render_after_reset(self):
         """Test render works after multiple resets."""
-        env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
+        env = SnakeEnv(grid_size=10, render_mode="rgb_array")
 
         for _ in range(3):
             env.reset()
@@ -66,7 +66,7 @@ class TestEnvironmentRendering:
 
     def test_render_game_over_state(self):
         """Test render works in game over state."""
-        env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
+        env = SnakeEnv(grid_size=10, render_mode="rgb_array")
         env.snake = deque([(0, 0), (1, 0), (2, 0)])
         env.direction = 2  # Left
         env.food = (9, 9)
@@ -84,7 +84,7 @@ class TestEnvironmentRendering:
 
     def test_render_without_mode(self):
         """Test render returns None when render_mode not rgb_array."""
-        env = SnakeGameAI(grid_size=10, render_mode=None)
+        env = SnakeEnv(grid_size=10, render_mode=None)
         env.reset()
 
         frame = env.render()
@@ -94,7 +94,7 @@ class TestEnvironmentRendering:
 
     def test_get_state_for_display(self):
         """Test get_state_for_display returns complete state."""
-        env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
+        env = SnakeEnv(grid_size=10, render_mode="rgb_array")
         env.reset(seed=42)
 
         state = env.get_state_for_display()
@@ -120,7 +120,7 @@ class TestVisualizationFunctions:
 
     def test_state_vector_rendering(self):
         """Test state vector can be computed for visualization."""
-        env = SnakeGameAI(grid_size=10)
+        env = SnakeEnv(grid_size=10)
         env.reset()
 
         obs = env._get_observation()
@@ -187,7 +187,7 @@ class TestControlInteractions:
 
     def test_pause_resume_cycle(self):
         """Test pause/resume cycle doesn't break rendering."""
-        env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
+        env = SnakeEnv(grid_size=10, render_mode="rgb_array")
         env.reset(seed=42)
 
         # Initial render
@@ -210,7 +210,7 @@ class TestControlInteractions:
 
     def test_single_step(self):
         """Test single step advances game state."""
-        env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
+        env = SnakeEnv(grid_size=10, render_mode="rgb_array")
         env.reset(seed=42)
 
         frame1 = env.render()
@@ -226,7 +226,7 @@ class TestControlInteractions:
 
     def test_multiple_steps(self):
         """Test multiple steps advance game correctly."""
-        env = SnakeGameAI(grid_size=10, render_mode="rgb_array")
+        env = SnakeEnv(grid_size=10, render_mode="rgb_array")
         env.reset(seed=42)
 
         frames = []
@@ -264,7 +264,7 @@ class TestAgentVisualization:
     def test_pre_action_vs_post_action_q_values(self):
         """Test distinction between pre-action and post-action Q-values."""
         agent = Agent(hidden_size=64)
-        env = SnakeGameAI(grid_size=10)
+        env = SnakeEnv(grid_size=10)
         env.reset()
 
         state = env._get_observation()

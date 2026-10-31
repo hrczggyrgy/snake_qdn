@@ -12,7 +12,7 @@ import streamlit as st
 
 def render_training_diagnostics(controller: "TrainingController", snapshot: "TrainingSnapshot") -> None:
     """Render the lower Training Diagnostics area (collapsible)."""
-    from training import TrainingController, TrainingSnapshot
+    from snake_qdn import TrainingController, TrainingSnapshot
     from ui.charts import (
         render_bellman_update,
         render_epsilon_chart,
