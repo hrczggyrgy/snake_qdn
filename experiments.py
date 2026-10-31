@@ -560,9 +560,9 @@ class ExperimentRunner:
                         # Check remaining wall time budget for evaluation
                         remaining_time = None
                         if config.budget.max_wall_time_seconds is not None:
-                            elapsed = time.monotonic() - start_time
-                            # Use pre-calculated final evaluation time reserve
-                            remaining_time = total_deadline - elapsed - final_eval_time_reserve
+                            # training_deadline and total_deadline are absolute timestamps
+                            current_time = time.monotonic()
+                            remaining_time = training_deadline - current_time
                             # Skip if less than 1 second remaining
                             if remaining_time < 1.0:
                                 if verbose:
@@ -574,7 +574,7 @@ class ExperimentRunner:
                                     env_config=config.env_config,
                                     n_episodes=eval_episodes,
                                     episode_seeds=ep_seeds,
-                                    deadline=time.monotonic() + remaining_time,
+                                    deadline=training_deadline,
                                     max_total_steps=eval_budget,
                                     max_steps_per_episode=100,
                                 )
